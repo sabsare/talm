@@ -22,6 +22,11 @@ machine:
     - name: spl
     - name: vfio_pci
     - name: vfio_iommu_type1
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+        - https://mirror.gcr.io
   files:
   - content: |
       [plugins]

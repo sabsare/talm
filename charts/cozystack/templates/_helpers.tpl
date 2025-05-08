@@ -11,6 +11,7 @@ machine:
       validSubnets:
         {{- toYaml .Values.advertisedSubnets | nindent 8 }}
     extraConfig:
+      cpuManagerPolicy: static
       maxPods: 512
   kernel:
     modules:

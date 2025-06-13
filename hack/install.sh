@@ -1,40 +1,24 @@
-#!/usr/bin/env bash
-set -euo pipefail
-trap 'error "An unexpected error occurred."; exit 1' ERR
+#!/bin/sh
+set -e
 
 info()    { printf "\033[1;34m[INFO]\033[0m %s\n" "$*"; }
 success() { printf "\033[1;32m[SUCCESS]\033[0m %s\n" "$*"; }
 warn()    { printf "\033[1;33m[WARN]\033[0m %s\n" "$*" >&2; }
-error()   { printf "\033[1;31m[ERROR]\033[0m %s\n" "$*" >&2; }
+error()   { printf "\033[1;31m[ERROR]\033[0m %s\n" "$*" >&2; exit 1; }
 
-for cmd in curl uname mktemp jq tar; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    error "Required command '$cmd' not found. Please install it and retry."
-    exit 1
-  fi
+# Check required commands
+for cmd in uname mktemp tar sha256sum; do
+  command -v "$cmd" >/dev/null 2>&1 || error "Required command '$cmd' not found."
 done
 
-info "Fetching latest Talm release version..."
-
-API_URL="https://api.github.com/repos/cozystack/talm/releases/latest"
-TMPDIR=$(mktemp -d)
-cleanup() { rm -rf "$TMPDIR"; }
-trap cleanup EXIT
-
-HTTP_STATUS=$(curl -sSL -w '%{http_code}' -H 'Accept: application/vnd.github.v3+json' -o "$TMPDIR/response.json" "$API_URL")
-
-if [ "$HTTP_STATUS" -ne 200 ]; then
-  error "GitHub API returned HTTP status $HTTP_STATUS."
-  exit 1
+# Select download tool
+if command -v curl >/dev/null 2>&1; then
+  download() { curl -fsSL -o "$1" "$2"; }
+elif command -v wget >/dev/null 2>&1; then
+  download() { wget -qO "$1" "$2"; }
+else
+  error "Neither curl nor wget is available."
 fi
-
-LATEST_VERSION=$(jq -r '.tag_name' < "$TMPDIR/response.json")
-if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
-  error "Could not parse 'tag_name' from GitHub release response."
-  exit 1
-fi
-
-info "Latest version: $LATEST_VERSION"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -45,29 +29,46 @@ case "$ARCH" in
   i386 | i686) ARCH="i386" ;;
   *)
     error "Unsupported architecture: $ARCH"
-    exit 1
     ;;
 esac
 
 TAR_FILE="talm-$OS-$ARCH.tar.gz"
-DOWNLOAD_URL="https://github.com/cozystack/talm/releases/download/$LATEST_VERSION/$TAR_FILE"
+CHECKSUM_FILE="talm-checksums.txt"
+BASE_URL="https://github.com/cozystack/talm/releases/latest/download"
 
-info "Downloading $TAR_FILE from $DOWNLOAD_URL..."
-curl -fL "$DOWNLOAD_URL" -o "$TMPDIR/$TAR_FILE"
+TMPDIR=$(mktemp -d)
+cleanup() { rm -rf "$TMPDIR"; }
+trap cleanup EXIT INT TERM
 
-info "Extracting..."
+info "Downloading $TAR_FILE..."
+download "$TMPDIR/$TAR_FILE" "$BASE_URL/$TAR_FILE"
+
+info "Downloading checksum file..."
+download "$TMPDIR/$CHECKSUM_FILE" "$BASE_URL/$CHECKSUM_FILE"
+
+# Verify checksum
+EXPECTED_SUM=$(grep "  $TAR_FILE" "$TMPDIR/$CHECKSUM_FILE" | awk '{print $1}')
+[ -n "$EXPECTED_SUM" ] || error "Checksum not found for $TAR_FILE"
+
+ACTUAL_SUM=$(sha256sum "$TMPDIR/$TAR_FILE" | awk '{print $1}')
+
+if [ "$EXPECTED_SUM" != "$ACTUAL_SUM" ]; then
+  error "Checksum verification failed!
+Expected: $EXPECTED_SUM
+Actual:   $ACTUAL_SUM"
+fi
+
+success "Checksum verified."
+
+info "Extracting archive..."
 tar -xzf "$TMPDIR/$TAR_FILE" -C "$TMPDIR"
 
-if ! [ -f "$TMPDIR/talm" ]; then
-  error "Expected binary 'talm' not found in archive."
-  exit 1
-fi
+[ -f "$TMPDIR/talm" ] || error "Binary 'talm' not found in archive."
 
 chmod +x "$TMPDIR/talm"
 
-if [ "$(id -u)" = 0 ]; then
-  INSTALL_DIR="/usr/local/bin"
-elif [ -w "/usr/local/bin" ]; then
+# Determine install directory
+if [ "$(id -u)" = "0" ] || [ -w "/usr/local/bin" ]; then
   INSTALL_DIR="/usr/local/bin"
 else
   INSTALL_DIR="$HOME/.local/bin"

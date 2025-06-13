@@ -35,9 +35,9 @@ with the official tools like talosctl and Omni.
 
 Download binary from Github [releases page](https://github.com/cozystack/talm/releases/latest)
 
+Or use simple script to install it:
 ```bash
-chmod +x ./talm-linux-amd64
-sudo mv talm-linux-amd64 /usr/local/bin/talm
+curl -sSL https://github.com/cozystack/talm/raw/refs/heads/main/hack/install.sh | bash -s
 ```
 
 ## Getting Started

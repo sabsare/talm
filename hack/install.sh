@@ -7,7 +7,7 @@ success() { printf "\033[1;32m[SUCCESS]\033[0m %s\n" "$*"; }
 warn()    { printf "\033[1;33m[WARN]\033[0m %s\n" "$*" >&2; }
 error()   { printf "\033[1;31m[ERROR]\033[0m %s\n" "$*" >&2; }
 
-for cmd in curl uname mktemp jq; do
+for cmd in curl uname mktemp jq tar; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     error "Required command '$cmd' not found. Please install it and retry."
     exit 1
@@ -49,11 +49,20 @@ case "$ARCH" in
     ;;
 esac
 
-FILE="talm-$OS-$ARCH"
-DOWNLOAD_URL="https://github.com/cozystack/talm/releases/download/$LATEST_VERSION/$FILE"
+TAR_FILE="talm-$OS-$ARCH.tar.gz"
+DOWNLOAD_URL="https://github.com/cozystack/talm/releases/download/$LATEST_VERSION/$TAR_FILE"
 
-info "Downloading $FILE from $DOWNLOAD_URL..."
-curl -fL "$DOWNLOAD_URL" -o "$TMPDIR/talm"
+info "Downloading $TAR_FILE from $DOWNLOAD_URL..."
+curl -fL "$DOWNLOAD_URL" -o "$TMPDIR/$TAR_FILE"
+
+info "Extracting..."
+tar -xzf "$TMPDIR/$TAR_FILE" -C "$TMPDIR"
+
+if ! [ -f "$TMPDIR/talm" ]; then
+  error "Expected binary 'talm' not found in archive."
+  exit 1
+fi
+
 chmod +x "$TMPDIR/talm"
 
 if [ "$(id -u)" = 0 ]; then

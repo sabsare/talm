@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env sh
 set -e
 
 info()    { printf "\033[1;34m[INFO]\033[0m %s\n" "$*"; }
@@ -6,12 +6,48 @@ success() { printf "\033[1;32m[SUCCESS]\033[0m %s\n" "$*"; }
 warn()    { printf "\033[1;33m[WARN]\033[0m %s\n" "$*" >&2; }
 error()   { printf "\033[1;31m[ERROR]\033[0m %s\n" "$*" >&2; exit 1; }
 
-# Check required commands
+# ----------------------
+# Argument parsing
+# ----------------------
+VERSION="latest"
+
+usage() {
+  cat <<EOF
+Usage: $0 [-v VERSION]
+
+Options:
+  -v VERSION  Install a specific release tag (e.g. 1.2.3 or v1.2.3). Defaults to latest.
+  -h          Show this help message and exit.
+EOF
+}
+
+while getopts "v:h" opt; do
+  case $opt in
+    v) VERSION="$OPTARG" ;;
+    h) usage; exit 0 ;;
+    *) usage; exit 1 ;;
+  esac
+done
+shift $((OPTIND-1))
+
+# Normalize tag: prepend 'v' if missing
+if [ "$VERSION" != "latest" ]; then
+  case "$VERSION" in
+    v*) TAG="$VERSION" ;;
+    *)  TAG="v$VERSION" ;;
+  esac
+else
+  TAG="latest"
+fi
+
+# ----------------------
+# Prerequisite commands
+# ----------------------
 for cmd in uname mktemp tar sha256sum; do
   command -v "$cmd" >/dev/null 2>&1 || error "Required command '$cmd' not found."
 done
 
-# Select download tool
+# Detect download tool
 if command -v curl >/dev/null 2>&1; then
   download() { curl -fsSL -o "$1" "$2"; }
 elif command -v wget >/dev/null 2>&1; then
@@ -24,9 +60,9 @@ OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 case "$ARCH" in
-  x86_64 | amd64) ARCH="amd64" ;;
-  arm64 | aarch64) ARCH="arm64" ;;
-  i386 | i686) ARCH="i386" ;;
+  x86_64|amd64) ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  i386|i686) ARCH="i386" ;;
   *)
     error "Unsupported architecture: $ARCH"
     ;;
@@ -34,28 +70,31 @@ esac
 
 TAR_FILE="talm-$OS-$ARCH.tar.gz"
 CHECKSUM_FILE="talm-checksums.txt"
-BASE_URL="https://github.com/cozystack/talm/releases/latest/download"
+
+if [ "$TAG" = "latest" ]; then
+  BASE_URL="https://github.com/cozystack/talm/releases/latest/download"
+else
+  BASE_URL="https://github.com/cozystack/talm/releases/download/$TAG"
+fi
 
 TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT INT TERM
 
+info "Installing talm version: $TAG"
 info "Downloading $TAR_FILE..."
-download "$TMPDIR/$TAR_FILE" "$BASE_URL/$TAR_FILE"
+download "$TMPDIR/$TAR_FILE" "$BASE_URL/$TAR_FILE" || error "Failed to download $TAR_FILE"
 
 info "Downloading checksum file..."
-download "$TMPDIR/$CHECKSUM_FILE" "$BASE_URL/$CHECKSUM_FILE"
+download "$TMPDIR/$CHECKSUM_FILE" "$BASE_URL/$CHECKSUM_FILE" || error "Failed to download $CHECKSUM_FILE"
 
-# Verify checksum
 EXPECTED_SUM=$(grep "  $TAR_FILE" "$TMPDIR/$CHECKSUM_FILE" | awk '{print $1}')
 [ -n "$EXPECTED_SUM" ] || error "Checksum not found for $TAR_FILE"
 
 ACTUAL_SUM=$(sha256sum "$TMPDIR/$TAR_FILE" | awk '{print $1}')
 
 if [ "$EXPECTED_SUM" != "$ACTUAL_SUM" ]; then
-  error "Checksum verification failed!
-Expected: $EXPECTED_SUM
-Actual:   $ACTUAL_SUM"
+  error "Checksum verification failed!\nExpected: $EXPECTED_SUM\nActual:   $ACTUAL_SUM"
 fi
 
 success "Checksum verified."
@@ -82,5 +121,5 @@ fi
 INSTALL_PATH="$INSTALL_DIR/talm"
 mv "$TMPDIR/talm" "$INSTALL_PATH"
 
-success "Talm installed successfully at $INSTALL_PATH"
-info "You can now run: talm --help"
+success "talm installed successfully at $INSTALL_PATH"
+info "Run 'talm --help' to get started."

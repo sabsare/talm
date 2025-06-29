@@ -10,6 +10,8 @@ import (
 	_ "embed"
 	"log"
 	"os"
+	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/pkg/xattr"
@@ -32,7 +34,13 @@ var IsEnabled = sync.OnceValue(func() bool {
 
 	val := procfs.ProcCmdline().Get(constants.KernelParamSELinux).First()
 
-	return val != nil && *val == "1"
+	var selinuxFSPresent bool
+
+	if _, err := os.Stat("/sys/fs/selinux"); err == nil {
+		selinuxFSPresent = true
+	}
+
+	return val != nil && *val == "1" && selinuxFSPresent
 })
 
 // IsEnforcing checks if SELinux is enabled and the mode should be enforcing.
@@ -47,31 +55,65 @@ var IsEnforcing = sync.OnceValue(func() bool {
 	return val != nil && *val == "1"
 })
 
+// GetLabel gets label for file, directory or symlink (not following symlinks)
+// It does not perform the operation in case SELinux is disabled.
+func GetLabel(filename string) (string, error) {
+	if !IsEnabled() {
+		return "", nil
+	}
+
+	label, err := xattr.LGet(filename, "security.selinux")
+	if err != nil {
+		return "", err
+	}
+
+	if label == nil {
+		return "", nil
+	}
+
+	return string(bytes.Trim(label, "\x00\n")), nil
+}
+
 // SetLabel sets label for file, directory or symlink (not following symlinks)
 // It does not perform the operation in case SELinux is disabled, provided label is empty or already set.
-func SetLabel(filename string, label string) error {
-	if label == "" {
+func SetLabel(filename string, label string, excludeLabels ...string) error {
+	if label == "" || !IsEnabled() {
 		return nil
 	}
 
-	if IsEnabled() {
-		// We use LGet/LSet so that we manipulate label on the exact path, not the symlink target.
-		currentLabel, err := xattr.LGet(filename, "security.selinux")
-		if err != nil {
-			return err
-		}
+	currentLabel, err := GetLabel(filename)
+	if err != nil {
+		return err
+	}
 
-		// Skip extra FS transactions when labels are okay.
-		if string(bytes.Trim(currentLabel, "\x00\n")) == label {
-			return nil
-		}
+	// Skip extra FS transactions when labels are okay.
+	if currentLabel == label {
+		return nil
+	}
 
-		if err := xattr.LSet(filename, "security.selinux", []byte(label)); err != nil {
-			return err
-		}
+	// Skip setting label if it's in excludeLabels.
+	if currentLabel != "" && slices.Contains(excludeLabels, currentLabel) {
+		return nil
+	}
+
+	// We use LGet/LSet so that we manipulate label on the exact path, not the symlink target.
+	if err := xattr.LSet(filename, "security.selinux", []byte(label)); err != nil {
+		return err
 	}
 
 	return nil
+}
+
+// SetLabelRecursive sets label for directory and its content recursively.
+// It does not perform the operation in case SELinux is disabled, provided label is empty or already set.
+func SetLabelRecursive(dir string, label string, excludeLabels ...string) error {
+	if label == "" || !IsEnabled() {
+		return nil
+	}
+
+	return filepath.Walk(dir, func(path string, _ os.FileInfo, err error) error {
+		return SetLabel(path, label, excludeLabels...)
+	})
 }
 
 // Init initializes SELinux based on the configured mode.

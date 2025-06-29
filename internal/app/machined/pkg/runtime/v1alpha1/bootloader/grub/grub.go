@@ -8,8 +8,14 @@ package grub
 import (
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/kexec"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
 	"github.com/cozystack/talm/internal/pkg/partition"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/version"
@@ -21,6 +27,8 @@ type Config struct {
 	Fallback       BootLabel
 	Entries        map[BootLabel]MenuEntry
 	AddResetOption bool
+
+	installEFI bool
 }
 
 // MenuEntry represents a grub menu entry in the grub config file.
@@ -42,6 +50,46 @@ func NewConfig() *Config {
 		Entries:        map[BootLabel]MenuEntry{},
 		AddResetOption: true,
 	}
+}
+
+// KexecLoad does a kexec using the bootloader config.
+func (c *Config) KexecLoad(r runtime.Runtime, disk string) error {
+	_, err := ProbeWithCallback(disk, options.ProbeOptions{}, func(grubConf *Config) error {
+		defaultEntry, ok := grubConf.Entries[grubConf.Default]
+
+		if !ok {
+			return nil
+		}
+
+		kernelPath := filepath.Join(constants.BootMountPoint, defaultEntry.Linux)
+		initrdPath := filepath.Join(constants.BootMountPoint, defaultEntry.Initrd)
+
+		kernel, err := os.Open(kernelPath)
+		if err != nil {
+			return err
+		}
+
+		defer kernel.Close() //nolint:errcheck
+
+		initrd, err := os.Open(initrdPath)
+		if err != nil {
+			return err
+		}
+
+		defer initrd.Close() //nolint:errcheck
+
+		cmdline := strings.TrimSpace(defaultEntry.Cmdline)
+
+		if err = kexec.Load(r, kernel, int(initrd.Fd()), cmdline); err != nil {
+			return err
+		}
+
+		log.Printf("prepared kexec environment kernel=%q initrd=%q cmdline=%q", kernelPath, initrdPath, cmdline)
+
+		return nil
+	})
+
+	return err
 }
 
 // RequiredPartitions returns the list of partitions required by the bootloader.

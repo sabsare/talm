@@ -180,6 +180,13 @@ func (s *Server) ApplyConfiguration(ctx context.Context, in *machine.ApplyConfig
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// as we are not in maintenance mode, the v1alpha1 config should be always present
+	// in the future we should allow to remove v1alpha1, but for now for better UX we deny
+	// such requests to avoid confusion
+	if cfgProvider.RawV1Alpha1() == nil {
+		return nil, status.Error(codes.InvalidArgument, "the applied machine configuration doesn't contain v1alpha1 config, did you mean to patch the machine config instead?")
+	}
+
 	validationMode := modeWrapper{
 		Mode:      s.Controller.Runtime().State().Platform().Mode(),
 		installed: s.Controller.Runtime().State().Machine().Installed(),
@@ -246,17 +253,6 @@ func (s *Server) ApplyConfiguration(ctx context.Context, in *machine.ApplyConfig
 
 	log.Printf("apply config request: mode %s", strings.ToLower(mode))
 
-	cfg, err := cfgProvider.Bytes()
-	if err != nil {
-		return nil, err
-	}
-
-	if in.Mode != machine.ApplyConfigurationRequest_TRY {
-		if err := os.WriteFile(constants.ConfigPath, cfg, 0o600); err != nil {
-			return nil, err
-		}
-	}
-
 	//nolint:exhaustive
 	switch in.Mode {
 	// --mode=try
@@ -272,16 +268,29 @@ func (s *Server) ApplyConfiguration(ctx context.Context, in *machine.ApplyConfig
 			return nil, err
 		}
 
-		fallthrough
+		if err := s.Controller.Runtime().SetConfig(cfgProvider); err != nil {
+			return nil, err
+		}
 	// --mode=no-reboot
 	case machine.ApplyConfigurationRequest_NO_REBOOT:
+		if err := s.Controller.Runtime().SetPersistedConfig(cfgProvider); err != nil {
+			return nil, err
+		}
+
 		if err := s.Controller.Runtime().SetConfig(cfgProvider); err != nil {
 			return nil, err
 		}
 	// --mode=staged
 	case machine.ApplyConfigurationRequest_STAGED:
+		if err := s.Controller.Runtime().SetPersistedConfig(cfgProvider); err != nil {
+			return nil, err
+		}
 	// --mode=reboot
 	case machine.ApplyConfigurationRequest_REBOOT:
+		if err := s.Controller.Runtime().SetPersistedConfig(cfgProvider); err != nil {
+			return nil, err
+		}
+
 		go func() {
 			if err := s.Controller.Run(context.Background(), runtime.SequenceReboot, nil, runtime.WithTakeover()); err != nil {
 				if !runtime.IsRebootError(err) {
@@ -323,7 +332,7 @@ func (s *Server) GenerateConfiguration(ctx context.Context, in *machine.Generate
 		return nil, errors.New("config can't be generated on worker nodes")
 	}
 
-	return configuration.Generate(ctx, in)
+	return configuration.Generate(ctx, s.Controller.Runtime().State().V1Alpha2().Resources(), in)
 }
 
 // Reboot implements the machine.MachineServer interface.
@@ -566,6 +575,7 @@ type ResetOptions struct {
 	*machine.ResetRequest
 
 	systemDiskTargets []*partition.VolumeWipeTarget
+	systemDiskPaths   []string
 }
 
 // GetSystemDiskTargets implements runtime.ResetOptions interface.
@@ -577,6 +587,11 @@ func (opt *ResetOptions) GetSystemDiskTargets() []runtime.PartitionTarget {
 	return xslices.Map(opt.systemDiskTargets, func(t *partition.VolumeWipeTarget) runtime.PartitionTarget { return t })
 }
 
+// GetSystemDiskPaths implements runtime.ResetOptions interface.
+func (opt *ResetOptions) GetSystemDiskPaths() []string {
+	return opt.systemDiskPaths
+}
+
 // String implements runtime.ResetOptions interface.
 func (opt *ResetOptions) String() string {
 	return strings.Join(xslices.Map(opt.systemDiskTargets, func(t *partition.VolumeWipeTarget) string { return t.String() }), ", ")
@@ -584,7 +599,7 @@ func (opt *ResetOptions) String() string {
 
 // Reset resets the node.
 //
-//nolint:gocyclo
+//nolint:gocyclo,cyclop
 func (s *Server) Reset(ctx context.Context, in *machine.ResetRequest) (reply *machine.ResetResponse, err error) {
 	actorID := uuid.New().String()
 
@@ -644,8 +659,8 @@ func (s *Server) Reset(ctx context.Context, in *machine.ResetRequest) (reply *ma
 				return nil, fmt.Errorf("failed to get volume status with label %q: %w", spec.Label, err)
 			}
 
-			if volumeStatus.TypedSpec().Phase != block.VolumePhaseReady {
-				return nil, fmt.Errorf("failed to reset: volume %q is not ready", spec.Label)
+			if volumeStatus.TypedSpec().Location == "" {
+				return nil, fmt.Errorf("failed to reset: volume %q is not located", spec.Label)
 			}
 
 			target := partition.VolumeWipeTargetFromVolumeStatus(volumeStatus)
@@ -653,6 +668,13 @@ func (s *Server) Reset(ctx context.Context, in *machine.ResetRequest) (reply *ma
 			if spec.Wipe {
 				opts.systemDiskTargets = append(opts.systemDiskTargets, target)
 			}
+		}
+	}
+
+	if in.Mode != machine.ResetRequest_USER_DISKS && len(in.GetSystemPartitionsToWipe()) == 0 {
+		opts.systemDiskPaths, err = block.GetSystemDiskPaths(ctx, s.Controller.Runtime().State().V1Alpha2().Resources())
+		if err != nil {
+			return nil, fmt.Errorf("system disk paths lookup failed: %w", err)
 		}
 	}
 

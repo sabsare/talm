@@ -23,6 +23,7 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
@@ -48,7 +49,21 @@ func NewAWS() (*AWS, error) {
 
 // ParseMetadata converts AWS platform metadata into platform network config.
 func (a *AWS) ParseMetadata(metadata *MetadataConfig) (*runtime.PlatformNetworkConfig, error) {
-	networkConfig := &runtime.PlatformNetworkConfig{}
+	networkConfig := &runtime.PlatformNetworkConfig{
+		TimeServers: []network.TimeServerSpecSpec{
+			{
+				NTPServers: []string{
+					// See https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configure-ec2-ntp.html
+					//
+					// Include both IPv4 & IPv6 addresses for the NTP servers, Talos would lock to one of them (whichever works),
+					// but it would be compatible with v4-only and v6-only deployments.
+					"169.254.169.123",
+					"fd00:ec2::123",
+				},
+				ConfigLayer: network.ConfigPlatform,
+			},
+		},
+	}
 
 	if metadata.Hostname != "" {
 		hostnameSpec := network.HostnameSpecSpec{
@@ -89,6 +104,7 @@ func (a *AWS) ParseMetadata(metadata *MetadataConfig) (*runtime.PlatformNetworkC
 		Spot:         metadata.InstanceLifeCycle == "spot",
 		InternalDNS:  metadata.InternalDNS,
 		ExternalDNS:  metadata.ExternalDNS,
+		Tags:         metadata.Tags,
 	}
 
 	return networkConfig, nil
@@ -142,7 +158,7 @@ func (a *AWS) Mode() runtime.Mode {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (a *AWS) KernelArgs(string) procfs.Parameters {
+func (a *AWS) KernelArgs(string, quirks.Quirks) procfs.Parameters {
 	return []*procfs.Parameter{
 		procfs.NewParameter("console").Append("tty1").Append("ttyS0"),
 		procfs.NewParameter(constants.KernelParamNetIfnames).Append("0"),

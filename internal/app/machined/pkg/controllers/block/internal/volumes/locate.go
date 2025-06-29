@@ -24,13 +24,17 @@ import (
 //
 //nolint:gocyclo,cyclop
 func LocateAndProvision(ctx context.Context, logger *zap.Logger, volumeContext ManagerContext) error {
+	volumeContext.Status.MountSpec = volumeContext.Cfg.TypedSpec().Mount
+	volumeContext.Status.SymlinkSpec = volumeContext.Cfg.TypedSpec().Symlink
 	volumeType := volumeContext.Cfg.TypedSpec().Type
 
-	if volumeType == block.VolumeTypeTmpfs {
-		// tmpfs volumes are always ready
+	switch volumeType {
+	case block.VolumeTypeTmpfs, block.VolumeTypeDirectory, block.VolumeTypeSymlink, block.VolumeTypeOverlay:
+		// tmpfs, directory, symlink and overlays volumes are always ready
 		volumeContext.Status.Phase = block.VolumePhaseReady
 
 		return nil
+	case block.VolumeTypeDisk, block.VolumeTypePartition:
 	}
 
 	// below for partition/disk volumes:

@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"iter"
 	"net/netip"
-	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -54,9 +53,6 @@ func NewManager(mr MemberReader, hook suture.EventHook, logger *zap.Logger) *Man
 		logger:      logger,
 		runners:     map[AddressPair]suture.ServiceToken{},
 	}
-
-	// If we lost ref to the manager. Ensure finalizer is called and all upstreams are collected.
-	runtime.SetFinalizer(m, (*Manager).finalize)
 
 	return m
 }
@@ -139,11 +135,18 @@ func makeResult(cfg AddressPair, s Status) RunResult { return RunResult{AddressP
 func (m *Manager) AllowNodeResolving(enabled bool) { m.nodeHandler.SetEnabled(enabled) }
 
 // SetUpstreams sets the upstreams for the DNS handler. It returns true if the upstreams were updated, false otherwise.
-func (m *Manager) SetUpstreams(prxs iter.Seq[*proxy.Proxy]) bool { return m.handler.SetProxy(prxs) }
+func (m *Manager) SetUpstreams(prxs iter.Seq[*proxy.Proxy]) bool {
+	if !m.handler.SetProxy(prxs) {
+		return false
+	}
 
-// ClearAll stops and removes all runners. It returns an iterator which yields the address pairs that were removed
-// and/or errors that occurred during the removal process. It's mandatory to range over the iterator to ensure all
-// runners are stopped.
+	// Upstreams updated, clear cache to prevent DNS poisoning.
+	m.rootHandler.Clear()
+
+	return true
+}
+
+// ClearAll stops and removes all runners. Returns all errors if any runner failed to properly stop.
 func (m *Manager) ClearAll(dry bool) error {
 	if dry {
 		return nil
@@ -168,16 +171,12 @@ func (m *Manager) clearAll() iter.Seq2[AddressPair, error] {
 
 		defer m.handler.Stop()
 
-		removeAndWait := m.s.RemoveAndWait
-		if m.originalCtx.Err() != nil {
-			// ctx canceled, no reason to remove runners from Supervisor since they are already dropped
-			removeAndWait = func(id suture.ServiceToken, timeout time.Duration) error { return nil }
-		}
-
 		for runData, token := range m.runners {
-			err := removeAndWait(token, 0)
-			if err != nil {
+			err := m.s.RemoveAndWait(token, 0)
+			if err != nil && !errors.Is(err, suture.ErrSupervisorNotRunning) && !errors.Is(err, suture.ErrTimeout) {
 				err = fmt.Errorf("error removing runner: %w", err)
+			} else {
+				err = nil
 			}
 
 			if !yield(runData, err) {
@@ -186,20 +185,6 @@ func (m *Manager) clearAll() iter.Seq2[AddressPair, error] {
 
 			delete(m.runners, runData)
 		}
-	}
-}
-
-func (m *Manager) finalize() {
-	for data, err := range m.clearAll() {
-		if err != nil {
-			m.logger.Error("error stopping dns runner", zap.Error(err))
-		}
-
-		m.logger.Info(
-			"dns runner stopped from finalizer!",
-			zap.String("address", data.Addr.String()),
-			zap.String("network", data.Network),
-		)
 	}
 }
 

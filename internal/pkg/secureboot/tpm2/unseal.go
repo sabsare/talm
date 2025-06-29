@@ -15,9 +15,8 @@ import (
 	"fmt"
 
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/tpm"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
@@ -25,7 +24,7 @@ import (
 //
 //nolint:gocyclo,cyclop
 func Unseal(sealed SealedResponse) ([]byte, error) {
-	t, err := transport.OpenTPM()
+	t, err := tpm.Open()
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +135,7 @@ func Unseal(sealed SealedResponse) ([]byte, error) {
 		}
 	}()
 
-	pcrSelector, err := CreateSelector([]int{secureboot.UKIPCR})
+	pcrSelector, err := CreateSelector([]int{constants.UKIPCR})
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +180,7 @@ func Unseal(sealed SealedResponse) ([]byte, error) {
 	}
 
 	if signature == "" {
-		return nil, errors.New("signature not found")
+		return nil, errors.New("no signatures matching PCR SHA256 digest found in signature JSON")
 	}
 
 	signatureDecoded, err := base64.StdEncoding.DecodeString(signature)
@@ -225,7 +224,7 @@ func Unseal(sealed SealedResponse) ([]byte, error) {
 		return nil, fmt.Errorf("failed to execute policy authorize: %w", err)
 	}
 
-	secureBootStatePCRSelector, err := CreateSelector([]int{secureboot.SecureBootStatePCR})
+	secureBootStatePCRSelector, err := CreateSelector([]int{SecureBootStatePCR})
 	if err != nil {
 		return nil, err
 	}

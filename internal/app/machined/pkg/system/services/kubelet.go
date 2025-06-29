@@ -105,6 +105,22 @@ func (k *Kubelet) DependsOn(runtime.Runtime) []string {
 	return []string{"cri"}
 }
 
+// Volumes implements the Service interface.
+func (k *Kubelet) Volumes(runtime.Runtime) []string {
+	return []string{
+		"/var/lib",
+		"/var/lib/kubelet",
+		"/var/log",
+		"/var/log/audit",
+		"/var/log/containers",
+		"/var/log/pods",
+		"/var/lib/kubelet/seccomp",
+		constants.SeccompProfilesDirectory,
+		constants.KubernetesAuditLogDir,
+		constants.UserVolumeMountPoint,
+	}
+}
+
 // Runner implements the Service interface.
 func (k *Kubelet) Runner(r runtime.Runtime) (runner.Runner, error) {
 	specResource, err := safe.ReaderGet[*k8s.KubeletSpec](
@@ -129,7 +145,7 @@ func (k *Kubelet) Runner(r runtime.Runtime) (runner.Runner, error) {
 		{Type: "bind", Destination: "/dev", Source: "/dev", Options: []string{"rbind", "rshared", "rw"}},
 		{Type: "sysfs", Destination: "/sys", Source: "/sys", Options: []string{"bind", "ro"}},
 		{Type: "bind", Destination: constants.CgroupMountPath, Source: constants.CgroupMountPath, Options: []string{"rbind", "rshared", "rw"}},
-		{Type: "bind", Destination: "/lib/modules", Source: "/lib/modules", Options: []string{"bind", "ro"}},
+		{Type: "bind", Destination: "/lib/modules", Source: "/usr/lib/modules", Options: []string{"bind", "ro"}},
 		{Type: "bind", Destination: "/etc/kubernetes", Source: "/etc/kubernetes", Options: []string{"bind", "rshared", "rw"}},
 		{Type: "bind", Destination: constants.KubeletCredentialProviderBinDir, Source: constants.KubeletCredentialProviderBinDir, Options: []string{"bind", "ro"}},
 		{Type: "bind", Destination: "/etc/nfsmount.conf", Source: "/etc/nfsmount.conf", Options: []string{"bind", "ro"}},
@@ -143,6 +159,7 @@ func (k *Kubelet) Runner(r runtime.Runtime) (runner.Runner, error) {
 		{Type: "bind", Destination: "/var/lib/kubelet", Source: "/var/lib/kubelet", Options: []string{"rbind", "rshared", "rw"}},
 		{Type: "bind", Destination: "/var/log/containers", Source: "/var/log/containers", Options: []string{"rbind", "rshared", "rw"}},
 		{Type: "bind", Destination: "/var/log/pods", Source: "/var/log/pods", Options: []string{"rbind", "rshared", "rw"}},
+		{Type: "bind", Destination: constants.UserVolumeMountPoint, Source: constants.UserVolumeMountPoint, Options: []string{"rbind", "rshared", "ro"}},
 	}
 
 	if _, err := os.Stat("/sys/kernel/security"); err == nil {
@@ -231,12 +248,10 @@ func kubeletSeccomp(seccomp *specs.LinuxSeccomp) {
 }
 
 func simpleHealthCheck(ctx context.Context, url string) error {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-
-	req = req.WithContext(ctx)
 
 	resp, err := http.DefaultClient.Do(req) //nolint:bodyclose
 	if err != nil {

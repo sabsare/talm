@@ -22,6 +22,7 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/nethelpers"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
@@ -146,6 +147,16 @@ func (g *GCP) ParseMetadata(metadata *MetadataConfig, interfaces []NetworkInterf
 
 	preempted, _ := strconv.ParseBool(metadata.Preempted) //nolint:errcheck
 
+	var tags map[string]string
+
+	if len(metadata.Tags) > 0 {
+		tags = make(map[string]string, len(metadata.Tags))
+
+		for _, tag := range metadata.Tags {
+			tags[tag] = ""
+		}
+	}
+
 	networkConfig.Metadata = &runtimeres.PlatformMetadataSpec{
 		Platform:     g.Name(),
 		Hostname:     metadata.Hostname,
@@ -155,6 +166,7 @@ func (g *GCP) ParseMetadata(metadata *MetadataConfig, interfaces []NetworkInterf
 		InstanceID:   metadata.InstanceID,
 		ProviderID:   fmt.Sprintf("gce://%s/%s/%s", metadata.ProjectID, metadata.Zone, metadata.Name),
 		Spot:         preempted,
+		Tags:         tags,
 	}
 
 	return networkConfig, nil
@@ -199,7 +211,7 @@ func (g *GCP) Mode() runtime.Mode {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (g *GCP) KernelArgs(string) procfs.Parameters {
+func (g *GCP) KernelArgs(string, quirks.Quirks) procfs.Parameters {
 	return []*procfs.Parameter{
 		procfs.NewParameter("console").Append("ttyS0"),
 		procfs.NewParameter(constants.KernelParamNetIfnames).Append("0"),

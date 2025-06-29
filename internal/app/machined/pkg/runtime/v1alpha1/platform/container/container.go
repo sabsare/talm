@@ -17,6 +17,7 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/container/internal/files"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
 
@@ -51,7 +52,7 @@ func (c *Container) Mode() runtime.Mode {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (c *Container) KernelArgs(string) procfs.Parameters {
+func (c *Container) KernelArgs(string, quirks.Quirks) procfs.Parameters {
 	return nil
 }
 

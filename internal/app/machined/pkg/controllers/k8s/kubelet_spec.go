@@ -144,7 +144,9 @@ func (ctrl *KubeletSpecController) Run(ctx context.Context, r controller.Runtime
 		}
 
 		if cfgSpec.CloudProviderExternal {
-			args["cloud-provider"] = "external"
+			// we still need to specify `--cloud-provider=external` for the kubelet
+			// to get the node properly tainted so that it gets picked up by the external CCM
+			args["cloud-provider"] = CloudProviderExternal
 		}
 
 		if !kubeletVersion.SupportsKubeletConfigContainerRuntimeEndpoint() {

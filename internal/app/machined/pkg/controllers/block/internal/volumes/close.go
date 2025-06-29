@@ -18,6 +18,15 @@ import (
 
 // Close the encrypted volumes.
 func Close(ctx context.Context, logger *zap.Logger, volumeContext ManagerContext) error {
+	switch volumeContext.Cfg.TypedSpec().Type {
+	case block.VolumeTypeTmpfs, block.VolumeTypeDirectory, block.VolumeTypeSymlink, block.VolumeTypeOverlay:
+		// tmpfs, directory, symlink and overlay volumes can be always closed
+		volumeContext.Status.Phase = block.VolumePhaseClosed
+
+		return nil
+	case block.VolumeTypeDisk, block.VolumeTypePartition:
+	}
+
 	switch volumeContext.Cfg.TypedSpec().Encryption.Provider {
 	case block.EncryptionProviderNone:
 		// nothing to do
@@ -27,7 +36,7 @@ func Close(ctx context.Context, logger *zap.Logger, volumeContext ManagerContext
 	case block.EncryptionProviderLUKS2:
 		encryptionConfig := volumeContext.Cfg.TypedSpec().Encryption
 
-		handler, err := encryption.NewHandler(encryptionConfig, volumeContext.Cfg.Metadata().ID(), volumeContext.GetSystemInformation)
+		handler, err := encryption.NewHandler(encryptionConfig, volumeContext.Cfg.Metadata().ID(), volumeContext.GetSystemInformation, volumeContext.TPMLocker)
 		if err != nil {
 			return fmt.Errorf("failed to create encryption handler: %w", err)
 		}
@@ -43,7 +52,7 @@ func CloseWithHandler(ctx context.Context, logger *zap.Logger, volumeContext Man
 	ctx, cancel := context.WithTimeout(ctx, encryptionTimeout)
 	defer cancel()
 
-	encryptedName := filepath.Base(volumeContext.Status.MountLocation)
+	encryptedName := filepath.Base(volumeContext.Status.Location) + "-encrypted"
 
 	if err := handler.Close(ctx, encryptedName); err != nil {
 		return xerrors.NewTaggedf[Retryable]("error closing encrypted volume %q: %w", encryptedName, err)

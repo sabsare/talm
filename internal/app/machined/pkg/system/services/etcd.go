@@ -40,7 +40,6 @@ import (
 	"github.com/cozystack/talm/internal/pkg/containers/image"
 	"github.com/cozystack/talm/internal/pkg/environment"
 	"github.com/cozystack/talm/internal/pkg/etcd"
-	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/argsbuilder"
 	"github.com/siderolabs/talos/pkg/conditions"
 	"github.com/siderolabs/talos/pkg/filetree"
@@ -86,25 +85,6 @@ func (e *Etcd) ID(runtime.Runtime) string {
 //
 //nolint:gocyclo
 func (e *Etcd) PreFunc(ctx context.Context, r runtime.Runtime) error {
-	if err := os.MkdirAll(constants.EtcdDataPath, 0o700); err != nil {
-		return err
-	}
-
-	// Data path might exist after upgrade from previous version of Talos.
-	if err := os.Chmod(constants.EtcdDataPath, 0o700); err != nil {
-		return err
-	}
-
-	// Relabel in case of upgrade from older version or SELinux being disabled and then enabled.
-	if err := selinux.SetLabel(constants.EtcdDataPath, constants.EtcdDataSELinuxLabel); err != nil {
-		return err
-	}
-
-	// Make sure etcd user can access files in the data directory.
-	if err := filetree.ChownRecursive(constants.EtcdDataPath, constants.EtcdUserID, constants.EtcdUserID); err != nil {
-		return err
-	}
-
 	client, err := containerdapi.New(constants.CRIContainerdAddress)
 	if err != nil {
 		return err
@@ -182,6 +162,14 @@ func (e *Etcd) Condition(r runtime.Runtime) conditions.Condition {
 // DependsOn implements the Service interface.
 func (e *Etcd) DependsOn(runtime.Runtime) []string {
 	return []string{"cri"}
+}
+
+// Volumes implements the Service interface.
+func (e *Etcd) Volumes(runtime.Runtime) []string {
+	return []string{
+		"/var/lib",
+		constants.EtcdDataVolumeID,
+	}
 }
 
 // Runner implements the Service interface.

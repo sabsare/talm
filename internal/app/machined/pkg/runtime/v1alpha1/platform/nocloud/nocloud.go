@@ -22,6 +22,7 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/errors"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/platform/internal/netutils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/resources/network"
 	runtimeres "github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
@@ -95,8 +96,15 @@ func (n *Nocloud) Configuration(ctx context.Context, r state.State) ([]byte, err
 		return nil, err
 	}
 
-	if bytes.HasPrefix(machineConfigDl, []byte("#cloud-config")) {
+	firstLine, rest, _ := bytes.Cut(machineConfigDl, []byte("\n"))
+	firstLine = bytes.TrimSpace(firstLine)
+
+	switch {
+	case bytes.Equal(firstLine, []byte("#cloud-config")):
+		// ignore cloud-config, Talos does not support it
 		return nil, errors.ErrNoConfigSource
+	case bytes.Equal(firstLine, []byte("#include")):
+		return n.FetchInclude(ctx, rest, r)
 	}
 
 	return machineConfigDl, nil
@@ -108,7 +116,7 @@ func (n *Nocloud) Mode() runtime.Mode {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (n *Nocloud) KernelArgs(string) procfs.Parameters {
+func (n *Nocloud) KernelArgs(string, quirks.Quirks) procfs.Parameters {
 	return []*procfs.Parameter{
 		procfs.NewParameter("console").Append("tty1").Append("ttyS0"),
 		procfs.NewParameter(constants.KernelParamNetIfnames).Append("0"),
@@ -145,9 +153,9 @@ func (n *Nocloud) NetworkConfiguration(ctx context.Context, st state.State, ch c
 
 	// do a loop to retry network config remap in case of missing links
 	// on each try, export the configuration as it is, and if the network is reconciled next time, export the reconciled configuration
-	for {
-		bckoff := backoff.NewExponentialBackOff()
+	bckoff := backoff.NewExponentialBackOff()
 
+	for {
 		networkConfig, needsReconcile, err := n.ParseMetadata(ctx, unmarshalledNetworkConfig, st, metadata)
 		if err != nil {
 			return err

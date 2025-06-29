@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 	"github.com/google/go-tpm/tpm2/transport"
 
-	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/tpm"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 // CreateSelector converts PCR  numbers into a bitmask.
@@ -64,10 +64,10 @@ func ReadPCR(t transport.TPM, pcr int) ([]byte, error) {
 
 // PCRExtend hashes the input and extends the PCR with the hash.
 func PCRExtend(pcr int, data []byte) error {
-	t, err := transport.OpenTPM()
+	t, err := tpm.Open()
 	if err != nil {
-		// if the TPM is not available or not a TPM 2.0, we can skip the PCR extension
-		if os.IsNotExist(err) || strings.Contains(err.Error(), "device is not a TPM 2.0") {
+		// if the TPM is not available we can skip the PCR extension
+		if os.IsNotExist(err) {
 			log.Printf("TPM device is not available, skipping PCR extension")
 
 			return nil
@@ -77,6 +77,20 @@ func PCRExtend(pcr int, data []byte) error {
 	}
 
 	defer t.Close() //nolint:errcheck
+
+	// now we need to check if the TPM is a 2.0 device
+	// we can do this by checking the manufacturer,
+	// if it fails, we can skip the PCR extension
+	_, err = tpm2.GetCapability{
+		Capability:    tpm2.TPMCapTPMProperties,
+		Property:      uint32(tpm2.TPMPTManufacturer),
+		PropertyCount: 1,
+	}.Execute(t)
+	if err != nil {
+		log.Printf("TPM device is not a TPM 2.0, skipping PCR extension")
+
+		return nil
+	}
 
 	// since we are using SHA256, we can assume that the PCR bank is SHA256
 	digest := sha256.Sum256(data)
@@ -128,21 +142,21 @@ func PolicyPCRDigest(t transport.TPM, policyHandle tpm2.TPMHandle, pcrSelection 
 
 //nolint:gocyclo
 func validatePCRBanks(t transport.TPM) error {
-	pcrValue, err := ReadPCR(t, secureboot.UKIPCR)
+	pcrValue, err := ReadPCR(t, constants.UKIPCR)
 	if err != nil {
 		return fmt.Errorf("failed to read PCR: %w", err)
 	}
 
-	if err = validatePCRNotZeroAndNotFilled(pcrValue, secureboot.UKIPCR); err != nil {
+	if err = validatePCRNotZeroAndNotFilled(pcrValue, constants.UKIPCR); err != nil {
 		return err
 	}
 
-	pcrValue, err = ReadPCR(t, secureboot.SecureBootStatePCR)
+	pcrValue, err = ReadPCR(t, SecureBootStatePCR)
 	if err != nil {
 		return fmt.Errorf("failed to read PCR: %w", err)
 	}
 
-	if err = validatePCRNotZeroAndNotFilled(pcrValue, secureboot.SecureBootStatePCR); err != nil {
+	if err = validatePCRNotZeroAndNotFilled(pcrValue, SecureBootStatePCR); err != nil {
 		return err
 	}
 

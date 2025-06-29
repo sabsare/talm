@@ -40,7 +40,6 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	runtimelogging "github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
 	"github.com/cozystack/talm/internal/app/machined/pkg/system"
-	"github.com/cozystack/talm/internal/pkg/mount"
 	"github.com/siderolabs/talos/pkg/logging"
 	talosconfig "github.com/siderolabs/talos/pkg/machinery/config/config"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
@@ -97,8 +96,13 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&block.LVMActivationController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
+		&block.MountController{},
+		&block.MountRequestController{},
+		&block.MountStatusController{},
+		&block.SymlinksController{},
 		&block.SystemDiskController{},
 		&block.UserDiskConfigController{},
+		&block.UserVolumeConfigController{},
 		&block.VolumeConfigController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
@@ -112,9 +116,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&cluster.KubernetesPushController{},
 		&cluster.LocalAffiliateController{},
 		&cluster.MemberController{},
-		&cluster.NodeIdentityController{
-			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
-		},
+		&cluster.NodeIdentityController{},
 		&config.AcquireController{
 			PlatformConfiguration: &platformConfigurator{
 				platform: ctrl.v1alpha1Runtime.State().Platform(),
@@ -131,10 +133,11 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 			ResourceState:  ctrl.v1alpha1Runtime.State().V1Alpha2().Resources(),
 		},
 		&config.MachineTypeController{},
+		&config.PersistenceController{},
 		&cri.ImageCacheConfigController{
 			V1Alpha1ServiceManager: system.Services(ctrl.v1alpha1Runtime),
-			VolumeMounter:          mount.IdempotentSystemPartitionMounter(ctrl.v1alpha1Runtime),
 		},
+		&cri.RegistriesConfigController{},
 		&cri.SeccompProfileController{},
 		&cri.SeccompProfileFileController{
 			V1Alpha1Mode:             ctrl.v1alpha1Runtime.State().Platform().Mode(),
@@ -152,9 +155,20 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 			EtcPath:    "/etc",
 			ShadowPath: constants.SystemEtcPath,
 		},
+		&files.IQNController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
+		&files.NQNController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
 		&hardware.PCIDevicesController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
+		&hardware.PCIDriverRebindConfigController{},
+		&hardware.PCIDriverRebindController{
+			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
+		},
+		&hardware.PCRStatusController{},
 		&hardware.SystemInfoController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
@@ -213,7 +227,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.AddressEventController{
 			V1Alpha1Events: ctrl.v1alpha1Runtime.Events(),
 		},
-		&network.AddressMergeController{},
+		network.NewAddressMergeController(),
 		&network.AddressSpecController{},
 		&network.AddressStatusController{},
 		&network.DeviceConfigController{},
@@ -226,19 +240,22 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 			PodResolvConfPath: constants.PodResolvConfPath,
 			V1Alpha1Mode:      ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
+		&network.EthernetConfigController{},
+		&network.EthernetSpecController{},
+		&network.EthernetStatusController{},
 		&network.HardwareAddrController{},
 		&network.HostDNSConfigController{},
 		&network.HostnameConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.HostnameMergeController{},
+		network.NewHostnameMergeController(),
 		&network.HostnameSpecController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
 		&network.LinkConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.LinkMergeController{},
+		network.NewLinkMergeController(),
 		&network.LinkSpecController{},
 		&network.LinkStatusController{},
 		&network.NfTablesChainConfigController{},
@@ -248,7 +265,7 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.OperatorConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.OperatorMergeController{},
+		network.NewOperatorMergeController(),
 		&network.OperatorSpecController{
 			V1alpha1Platform: ctrl.v1alpha1Runtime.State().Platform(),
 			State:            ctrl.v1alpha1Runtime.State().V1Alpha2().Resources(),
@@ -264,12 +281,12 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.ResolverConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.ResolverMergeController{},
+		network.NewResolverMergeController(),
 		&network.ResolverSpecController{},
 		&network.RouteConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.RouteMergeController{},
+		network.NewRouteMergeController(),
 		&network.RouteSpecController{},
 		&network.RouteStatusController{},
 		&network.StatusController{
@@ -278,10 +295,9 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&network.TimeServerConfigController{
 			Cmdline: procfs.ProcCmdline(),
 		},
-		&network.TimeServerMergeController{},
+		network.NewTimeServerMergeController(),
 		&network.TimeServerSpecController{},
 		&perf.StatsController{},
-		cri.NewRegistriesConfigController(),
 		&runtimecontrollers.CRIImageGCController{},
 		&runtimecontrollers.DevicesStatusController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
@@ -334,10 +350,12 @@ func (ctrl *Controller) Run(ctx context.Context, drainer *runtime.Drainer) error
 		&runtimecontrollers.MachineStatusPublisherController{
 			V1Alpha1Events: ctrl.v1alpha1Runtime.Events(),
 		},
+		&runtimecontrollers.MountStatusController{},
 		&runtimecontrollers.SecurityStateController{
 			V1Alpha1Mode: ctrl.v1alpha1Runtime.State().Platform().Mode(),
 		},
-		runtimecontrollers.NewUniqueMachineTokenController(),
+		&runtimecontrollers.UniqueMachineTokenController{},
+		&runtimecontrollers.VersionController{},
 		&runtimecontrollers.WatchdogTimerConfigController{},
 		&runtimecontrollers.WatchdogTimerController{},
 		&secrets.APICertSANsController{},
@@ -420,7 +438,7 @@ func (ctrl *Controller) watchMachineConfig(ctx context.Context) {
 
 	if err := ctrl.v1alpha1Runtime.State().V1Alpha2().Resources().Watch(
 		ctx,
-		resource.NewMetadata(configresource.NamespaceName, configresource.MachineConfigType, configresource.V1Alpha1ID, resource.VersionUndefined),
+		resource.NewMetadata(configresource.NamespaceName, configresource.MachineConfigType, configresource.ActiveID, resource.VersionUndefined),
 		watchCh,
 	); err != nil {
 		ctrl.logger.Warn("error watching machine configuration", zap.Error(err))

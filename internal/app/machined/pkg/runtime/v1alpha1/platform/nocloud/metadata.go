@@ -6,7 +6,10 @@
 package nocloud
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	stderrors "errors"
 	"fmt"
 	"log"
 	"net"
@@ -129,8 +132,8 @@ type VLAN struct {
 // MetadataConfig holds meta info.
 type MetadataConfig struct {
 	Hostname     string `yaml:"hostname,omitempty"`
-	InternalDNS  string `json:"local-hostname,omitempty"`
-	ExternalDNS  string `json:"public-hostname,omitempty"`
+	InternalDNS  string `yaml:"local-hostname,omitempty"`
+	ExternalDNS  string `yaml:"public-hostname,omitempty"`
 	InstanceID   string `yaml:"instance-id,omitempty"`
 	InstanceType string `yaml:"instance-type,omitempty"`
 	ProviderID   string `yaml:"provider-id,omitempty"`
@@ -210,7 +213,7 @@ func (n *Nocloud) configFromCD(ctx context.Context, r state.State) (metaConfig [
 
 	metaConfig, err = os.ReadFile(filepath.Join(mnt, configMetaDataPath))
 	if err != nil {
-		log.Printf("failed to read %s", configMetaDataPath)
+		log.Printf("failed to read %s: %s", configMetaDataPath, err)
 
 		metaConfig = nil
 	}
@@ -219,7 +222,7 @@ func (n *Nocloud) configFromCD(ctx context.Context, r state.State) (metaConfig [
 
 	networkConfig, err = os.ReadFile(filepath.Join(mnt, configNetworkConfigPath))
 	if err != nil {
-		log.Printf("failed to read %s", configNetworkConfigPath)
+		log.Printf("failed to read %s: %s", configNetworkConfigPath, err)
 
 		networkConfig = nil
 	}
@@ -228,7 +231,7 @@ func (n *Nocloud) configFromCD(ctx context.Context, r state.State) (metaConfig [
 
 	machineConfig, err = os.ReadFile(filepath.Join(mnt, configUserDataPath))
 	if err != nil {
-		log.Printf("failed to read %s", configUserDataPath)
+		log.Printf("failed to read %s: %s", configUserDataPath, err)
 
 		machineConfig = nil
 	}
@@ -237,7 +240,11 @@ func (n *Nocloud) configFromCD(ctx context.Context, r state.State) (metaConfig [
 		return nil, nil, nil, fmt.Errorf("failed to unmount: %w", err)
 	}
 
-	return metaConfig, networkConfig, machineConfig, nil
+	if machineConfig == nil {
+		err = errors.ErrNoConfigSource
+	}
+
+	return metaConfig, networkConfig, machineConfig, err
 }
 
 //nolint:gocyclo
@@ -248,8 +255,8 @@ func (n *Nocloud) acquireConfig(ctx context.Context, r state.State) (metadataNet
 	}
 
 	var (
-		metaBaseURL, hostname string
-		networkSource         bool
+		metaBaseURL, hostname, instanceID string
+		networkSource                     bool
 	)
 
 	options := strings.Split(s.SystemInformation.SerialNumber, ";")
@@ -274,6 +281,9 @@ func (n *Nocloud) acquireConfig(ctx context.Context, r state.State) (metadataNet
 				}
 			case "h":
 				hostname = parts[1]
+
+			case "i":
+				instanceID = parts[1]
 			}
 		}
 	}
@@ -294,6 +304,10 @@ func (n *Nocloud) acquireConfig(ctx context.Context, r state.State) (metadataNet
 
 	if hostname != "" {
 		metadata.Hostname = hostname
+	}
+
+	if instanceID != "" {
+		metadata.InstanceID = instanceID
 	}
 
 	// Some providers may provide the hostname via user-data instead of meta-data (e.g. Proxmox VE)
@@ -921,4 +935,53 @@ func withDefault[T comparable](v T, defaultValue T) T {
 	}
 
 	return v
+}
+
+// FetchInclude fetches nocloud #include configuration from the URL specified in the body.
+func (n *Nocloud) FetchInclude(ctx context.Context, body []byte, st state.State) ([]byte, error) {
+	u, err := ExtractIncludeURL(body)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("fetching the nocloud #include configuration from: %q", u.String())
+
+	if err = netutils.Wait(ctx, st); err != nil {
+		return nil, err
+	}
+
+	return download.Download(ctx, u.String(), download.WithErrorOnNotFound(errors.ErrNoConfigSource),
+		download.WithErrorOnEmptyResponse(errors.ErrNoConfigSource))
+}
+
+// ExtractIncludeURL extracts the URL from the body of a nocloud #include configuration.
+//
+// Note: only a single URL is expected in the body.
+func ExtractIncludeURL(body []byte) (*url.URL, error) {
+	var urlLine string
+
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		if urlLine != "" {
+			return nil, fmt.Errorf("multiple #include URLs found in nocloud configuration: %q and %q", urlLine, line)
+		}
+
+		urlLine = line
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	if urlLine == "" {
+		return nil, stderrors.New("no #include URL found in nocloud configuration")
+	}
+
+	return url.Parse(urlLine)
 }

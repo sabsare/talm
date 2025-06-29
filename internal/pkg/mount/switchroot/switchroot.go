@@ -20,12 +20,13 @@ import (
 	"github.com/cozystack/talm/internal/pkg/secureboot/tpm2"
 	"github.com/cozystack/talm/internal/pkg/selinux"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 )
 
 // Paths preserved in the initramfs.
 var preservedPaths = map[string]struct{}{
 	constants.ExtensionsConfigFile:    {},
-	constants.FirmwarePath:            {},
+	quirks.New("").FirmwarePath():     {},
 	constants.SDStubDynamicInitrdPath: {},
 }
 
@@ -78,8 +79,8 @@ func Switch(prefix string, mountpoints mount.Points) (err error) {
 	}
 
 	// extend PCR 11 with leave-initrd
-	if err = tpm2.PCRExtend(secureboot.UKIPCR, []byte(secureboot.LeaveInitrd)); err != nil {
-		return fmt.Errorf("failed to extend PCR %d with leave-initrd: %v", secureboot.UKIPCR, err)
+	if err = tpm2.PCRExtend(constants.UKIPCR, []byte(secureboot.LeaveInitrd)); err != nil {
+		return fmt.Errorf("failed to extend PCR %d with leave-initrd: %v", constants.UKIPCR, err)
 	}
 
 	// Note that /sbin/init is machined. We call it init since this is the

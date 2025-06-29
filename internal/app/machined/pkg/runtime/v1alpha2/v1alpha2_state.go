@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/cosi-project/runtime/pkg/resource/meta"
+	"github.com/cosi-project/runtime/pkg/safe"
 	"github.com/cosi-project/runtime/pkg/state"
 	"github.com/cosi-project/runtime/pkg/state/impl/inmem"
 	"github.com/cosi-project/runtime/pkg/state/impl/namespaced"
@@ -100,10 +101,15 @@ func NewState() (*State, error) {
 		&block.DiscoveryRefreshRequest{},
 		&block.DiscoveryRefreshStatus{},
 		&block.Disk{},
+		&block.MountRequest{},
+		&block.MountStatus{},
+		&block.Symlink{},
 		&block.SystemDisk{},
 		&block.UserDiskConfigStatus{},
 		&block.VolumeConfig{},
 		&block.VolumeLifecycle{},
+		&block.VolumeMountRequest{},
+		&block.VolumeMountStatus{},
 		&block.VolumeStatus{},
 		&cluster.Affiliate{},
 		&cluster.Config{},
@@ -122,6 +128,9 @@ func NewState() (*State, error) {
 		&files.EtcFileStatus{},
 		&hardware.MemoryModule{},
 		&hardware.PCIDevice{},
+		&hardware.PCIDriverRebindConfig{},
+		&hardware.PCIDriverRebindStatus{},
+		&hardware.PCRStatus{},
 		&hardware.Processor{},
 		&hardware.SystemInformation{},
 		&k8s.AdmissionControlConfig{},
@@ -165,6 +174,8 @@ func NewState() (*State, error) {
 		&network.DeviceConfigSpec{},
 		&network.DNSResolveCache{},
 		&network.DNSUpstream{},
+		&network.EthernetSpec{},
+		&network.EthernetStatus{},
 		&network.HardwareAddr{},
 		&network.HostDNSConfig{},
 		&network.HostnameStatus{},
@@ -210,6 +221,7 @@ func NewState() (*State, error) {
 		&runtime.PlatformMetadata{},
 		&runtime.SecurityState{},
 		&runtime.UniqueMachineToken{},
+		&runtime.Version{},
 		&runtime.WatchdogTimerConfig{},
 		&runtime.WatchdogTimerStatus{},
 		&secrets.API{},
@@ -256,10 +268,23 @@ func (s *State) ResourceRegistry() *registry.ResourceRegistry {
 	return s.resourceRegistry
 }
 
+// GetConfig implements runtime.V1alpha2State interface.
+func (s *State) GetConfig(ctx context.Context) (talosconfig.Provider, error) {
+	cfg, err := safe.ReaderGetByID[*config.MachineConfig](ctx, s.resources, config.ActiveID)
+	if err != nil {
+		if state.IsNotFoundError(err) {
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	return cfg.Provider(), nil
+}
+
 // SetConfig implements runtime.V1alpha2State interface.
-func (s *State) SetConfig(cfg talosconfig.Provider) error {
-	cfgResource := config.NewMachineConfig(cfg)
-	ctx := context.TODO()
+func (s *State) SetConfig(ctx context.Context, id string, cfg talosconfig.Provider) error {
+	cfgResource := config.NewMachineConfigWithID(cfg, id)
 
 	oldCfg, err := s.resources.Get(ctx, cfgResource.Metadata())
 	if err != nil {

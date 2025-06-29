@@ -6,12 +6,20 @@
 package bootloader
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/siderolabs/go-blockdevice/v2/block"
+	"github.com/siderolabs/go-blockdevice/v2/partitioning/gpt"
+
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
+	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/dual"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/grub"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/sdboot"
 	"github.com/cozystack/talm/internal/pkg/partition"
+	"github.com/siderolabs/talos/pkg/imager/profile"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 )
 
@@ -27,6 +35,9 @@ type Bootloader interface {
 	Revert(disk string) error
 	// RequiredPartitions returns the required partitions for the bootloader.
 	RequiredPartitions() []partition.Options
+
+	// KexecLoad does a kexec_file_load using the current entry of the bootloader.
+	KexecLoad(r runtime.Runtime, disk string) error
 }
 
 // Probe checks if any supported bootloaders are installed.
@@ -56,21 +67,92 @@ func Probe(disk string, options options.ProbeOptions) (Bootloader, error) {
 
 // NewAuto returns a new bootloader based on auto-detection.
 func NewAuto() Bootloader {
-	if sdboot.IsBootedUsingSDBoot() {
+	if sdboot.IsUEFIBoot() {
 		return sdboot.New()
 	}
 
 	return grub.NewConfig()
 }
 
-// New returns a new bootloader based on the secureboot flag.
-func New(secureboot bool, talosVersion string) Bootloader {
-	if secureboot {
-		return sdboot.New()
+// New returns a new bootloader based on the secureboot flag and architecture.
+func New(bootloader, talosVersion, arch string) (Bootloader, error) {
+	switch bootloader {
+	case profile.DiskImageBootloaderGrub.String():
+		g := grub.NewConfig()
+		g.AddResetOption = quirks.New(talosVersion).SupportsResetGRUBOption()
+
+		return g, nil
+	case profile.DiskImageBootloaderSDBoot.String():
+		return sdboot.New(), nil
+	case profile.DiskImageBootloaderDualBoot.String():
+		return dual.New(), nil
+	default:
+		return nil, fmt.Errorf("unsupported bootloader %q", bootloader)
+	}
+}
+
+// CleanupBootloader cleans up the alternate bootloader when booting off via BIOS or UEFI.
+func CleanupBootloader(disk string, sdboot bool) error {
+	dev, err := block.NewFromPath(disk, block.OpenForWrite())
+	if err != nil {
+		return err
 	}
 
-	g := grub.NewConfig()
-	g.AddResetOption = quirks.New(talosVersion).SupportsResetGRUBOption()
+	defer dev.Close() //nolint:errcheck
 
-	return g
+	if err := dev.Lock(true); err != nil {
+		return fmt.Errorf("failed to lock device: %w", err)
+	}
+
+	defer dev.Unlock() //nolint:errcheck
+
+	gptDev, err := gpt.DeviceFromBlockDevice(dev)
+	if err != nil {
+		return fmt.Errorf("failed to get GPT device: %w", err)
+	}
+
+	gptTable, err := gpt.Read(gptDev)
+	if err != nil {
+		return fmt.Errorf("failed to read GPT: %w", err)
+	}
+
+	if sdboot {
+		// we wipe upto 446 bytes where the protective MBR is located
+		if _, err := dev.WipeRange(0, 446); err != nil {
+			return fmt.Errorf("failed to wipe MBR: %w", err)
+		}
+
+		if err := deletePartitions(gptTable, constants.BIOSGrubPartitionLabel, constants.BootPartitionLabel); err != nil {
+			return err
+		}
+	} else {
+		// means we are using GRUB
+		if err := deletePartitions(gptTable, constants.EFIPartitionLabel); err != nil {
+			return err
+		}
+	}
+
+	if err := gptTable.Write(); err != nil {
+		return fmt.Errorf("failed to write GPT: %w", err)
+	}
+
+	return nil
+}
+
+func deletePartitions(gptTable *gpt.Table, labels ...string) error {
+	for i, part := range gptTable.Partitions() {
+		if part == nil {
+			continue
+		}
+
+		for _, label := range labels {
+			if part.Name == label {
+				if err := gptTable.DeletePartition(i); err != nil {
+					return fmt.Errorf("failed to delete partition %s %d: %w", part.Name, i, err)
+				}
+			}
+		}
+	}
+
+	return nil
 }

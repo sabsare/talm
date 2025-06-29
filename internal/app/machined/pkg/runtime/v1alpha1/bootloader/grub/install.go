@@ -6,6 +6,7 @@ package grub
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/mount"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/v1alpha1/bootloader/options"
 	"github.com/cozystack/talm/internal/pkg/partition"
+	"github.com/cozystack/talm/internal/pkg/uki"
 	"github.com/siderolabs/talos/pkg/imager/utils"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
@@ -29,20 +31,44 @@ const (
 func (c *Config) Install(opts options.InstallOptions) (*options.InstallResult, error) {
 	var installResult *options.InstallResult
 
+	mountSpecs := []mount.Spec{
+		{
+			PartitionLabel: constants.BootPartitionLabel,
+			FilesystemType: partition.FilesystemTypeXFS,
+			MountTarget:    filepath.Join(opts.MountPrefix, constants.BootMountPoint),
+		},
+	}
+
+	efiMountSpec := mount.Spec{
+		PartitionLabel: constants.EFIPartitionLabel,
+		FilesystemType: partition.FilesystemTypeVFAT,
+		MountTarget:    filepath.Join(opts.MountPrefix, constants.EFIMountPoint),
+	}
+
+	// check if the EFI partition is present
+	if err := mount.PartitionOp(
+		opts.BootDisk,
+		[]mount.Spec{efiMountSpec},
+		func() error {
+			return nil
+		},
+		[]blkid.ProbeOption{
+			blkid.WithSkipLocking(true),
+		},
+		nil,
+		nil,
+		opts.BlkidInfo,
+	); err == nil {
+		c.installEFI = true
+	}
+
+	if c.installEFI {
+		mountSpecs = append(mountSpecs, efiMountSpec)
+	}
+
 	err := mount.PartitionOp(
 		opts.BootDisk,
-		[]mount.Spec{
-			{
-				PartitionLabel: constants.BootPartitionLabel,
-				FilesystemType: partition.FilesystemTypeXFS,
-				MountTarget:    filepath.Join(opts.MountPrefix, constants.BootMountPoint),
-			},
-			{
-				PartitionLabel: constants.EFIPartitionLabel,
-				FilesystemType: partition.FilesystemTypeVFAT,
-				MountTarget:    filepath.Join(opts.MountPrefix, constants.EFIMountPoint),
-			},
-		},
+		mountSpecs,
 		func() error {
 			var installErr error
 
@@ -62,24 +88,53 @@ func (c *Config) Install(opts options.InstallOptions) (*options.InstallResult, e
 	return installResult, err
 }
 
-//nolint:gocyclo
+//nolint:gocyclo,cyclop
 func (c *Config) install(opts options.InstallOptions) (*options.InstallResult, error) {
 	if err := c.flip(); err != nil {
 		return nil, err
 	}
 
-	if err := utils.CopyFiles(
-		opts.Printf,
-		utils.SourceDestination(
-			opts.BootAssets.KernelPath,
-			filepath.Join(opts.MountPrefix, constants.BootMountPoint, string(c.Default), constants.KernelAsset),
-		),
-		utils.SourceDestination(
-			opts.BootAssets.InitramfsPath,
-			filepath.Join(opts.MountPrefix, constants.BootMountPoint, string(c.Default), constants.InitramfsAsset),
-		),
-	); err != nil {
-		return nil, err
+	// if we have a kernel path, assume that the kernel and initramfs are available
+	if _, err := os.Stat(opts.BootAssets.KernelPath); err == nil {
+		if err := utils.CopyFiles(
+			opts.Printf,
+			utils.SourceDestination(
+				opts.BootAssets.KernelPath,
+				filepath.Join(opts.MountPrefix, constants.BootMountPoint, string(c.Default), constants.KernelAsset),
+			),
+			utils.SourceDestination(
+				opts.BootAssets.InitramfsPath,
+				filepath.Join(opts.MountPrefix, constants.BootMountPoint, string(c.Default), constants.InitramfsAsset),
+			),
+		); err != nil {
+			return nil, err
+		}
+	} else {
+		// if the kernel path does not exist, assume that the kernel and initramfs are in the UKI
+		assetInfo, err := uki.Extract(opts.BootAssets.UKIPath)
+		if err != nil {
+			return nil, err
+		}
+
+		defer func() {
+			if assetInfo.Closer != nil {
+				assetInfo.Close() //nolint:errcheck
+			}
+		}()
+
+		if err := utils.CopyReader(
+			opts.Printf,
+			utils.ReaderDestination(
+				assetInfo.Kernel,
+				filepath.Join(opts.MountPrefix, constants.BootMountPoint, string(c.Default), constants.KernelAsset),
+			),
+			utils.ReaderDestination(
+				assetInfo.Initrd,
+				filepath.Join(opts.MountPrefix, constants.BootMountPoint, string(c.Default), constants.InitramfsAsset),
+			),
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := c.Put(c.Default, opts.Cmdline, opts.Version); err != nil {
@@ -94,7 +149,11 @@ func (c *Config) install(opts options.InstallOptions) (*options.InstallResult, e
 
 	switch opts.Arch {
 	case amd64:
-		platforms = []string{"x86_64-efi", "i386-pc"}
+		if c.installEFI {
+			platforms = append(platforms, "x86_64-efi")
+		}
+
+		platforms = append(platforms, "i386-pc")
 	case arm64:
 		platforms = []string{"arm64-efi"}
 	}
@@ -107,8 +166,11 @@ func (c *Config) install(opts options.InstallOptions) (*options.InstallResult, e
 	for _, platform := range platforms {
 		args := []string{
 			"--boot-directory=" + filepath.Join(opts.MountPrefix, constants.BootMountPoint),
-			"--efi-directory=" + filepath.Join(opts.MountPrefix, constants.EFIMountPoint),
 			"--removable",
+		}
+
+		if c.installEFI {
+			args = append(args, "--efi-directory="+filepath.Join(opts.MountPrefix, constants.EFIMountPoint))
 		}
 
 		if opts.ImageMode {

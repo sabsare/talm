@@ -23,6 +23,7 @@ import (
 
 	"github.com/cozystack/talm/internal/pkg/encryption/helpers"
 	"github.com/cozystack/talm/internal/pkg/endpoint"
+	"github.com/siderolabs/talos/pkg/grpc/dialer"
 	"github.com/siderolabs/talos/pkg/httpdefaults"
 )
 
@@ -56,6 +57,8 @@ func (h *KMSKeyHandler) NewKey(ctx context.Context) (*encryption.Key, token.Toke
 	if err != nil {
 		return nil, nil, fmt.Errorf("error dialing KMS endpoint %q: %w", h.kmsEndpoint, err)
 	}
+
+	defer conn.Close() //nolint:errcheck
 
 	client := kms.NewKMSServiceClient(conn)
 
@@ -102,6 +105,8 @@ func (h *KMSKeyHandler) GetKey(ctx context.Context, t token.Token) (*encryption.
 		return nil, fmt.Errorf("error dialing KMS endpoint %q: %w", h.kmsEndpoint, err)
 	}
 
+	defer conn.Close() //nolint:errcheck
+
 	client := kms.NewKMSServiceClient(conn)
 
 	systemInformation, err := h.getSystemInfo(ctx)
@@ -140,5 +145,6 @@ func (h *KMSKeyHandler) getConn() (*grpc.ClientConn, error) {
 		endpoint.Host,
 		grpc.WithTransportCredentials(transportCredentials),
 		grpc.WithSharedWriteBuffer(true),
+		grpc.WithContextDialer(dialer.DynamicProxyDialer),
 	)
 }

@@ -16,8 +16,9 @@ import (
 	"github.com/siderolabs/go-blockdevice/v2/encryption/luks"
 	"github.com/siderolabs/go-blockdevice/v2/encryption/token"
 
-	"github.com/cozystack/talm/internal/pkg/secureboot"
+	"github.com/cozystack/talm/internal/pkg/encryption/helpers"
 	"github.com/cozystack/talm/internal/pkg/secureboot/tpm2"
+	"github.com/siderolabs/talos/pkg/machinery/constants"
 )
 
 // TPMToken is the userdata stored in the partition token metadata.
@@ -35,13 +36,15 @@ type TPMToken struct {
 type TPMKeyHandler struct {
 	KeyHandler
 
+	tpmLocker               helpers.TPMLockFunc
 	checkSecurebootOnEnroll bool
 }
 
 // NewTPMKeyHandler creates new TPMKeyHandler.
-func NewTPMKeyHandler(key KeyHandler, checkSecurebootOnEnroll bool) (*TPMKeyHandler, error) {
+func NewTPMKeyHandler(key KeyHandler, checkSecurebootOnEnroll bool, tpmLocker helpers.TPMLockFunc) (*TPMKeyHandler, error) {
 	return &TPMKeyHandler{
 		KeyHandler:              key,
+		tpmLocker:               tpmLocker,
 		checkSecurebootOnEnroll: checkSecurebootOnEnroll,
 	}, nil
 }
@@ -63,8 +66,15 @@ func (h *TPMKeyHandler) NewKey(ctx context.Context) (*encryption.Key, token.Toke
 		return nil, nil, err
 	}
 
-	resp, err := tpm2.Seal(key)
-	if err != nil {
+	var resp *tpm2.SealedResponse
+
+	if err := h.tpmLocker(ctx, func() error {
+		var err error
+
+		resp, err = tpm2.Seal(key)
+
+		return err
+	}); err != nil {
 		return nil, nil, err
 	}
 
@@ -74,7 +84,7 @@ func (h *TPMKeyHandler) NewKey(ctx context.Context) (*encryption.Key, token.Toke
 			KeySlots:          []int{h.slot},
 			SealedBlobPrivate: resp.SealedBlobPrivate,
 			SealedBlobPublic:  resp.SealedBlobPublic,
-			PCRs:              []int{secureboot.UKIPCR},
+			PCRs:              []int{constants.UKIPCR},
 			Alg:               "sha256",
 			PolicyHash:        resp.PolicyDigest,
 			KeyName:           resp.KeyName,
@@ -98,8 +108,15 @@ func (h *TPMKeyHandler) GetKey(ctx context.Context, t token.Token) (*encryption.
 		KeyName:           token.UserData.KeyName,
 	}
 
-	key, err := tpm2.Unseal(sealed)
-	if err != nil {
+	var key []byte
+
+	if err := h.tpmLocker(ctx, func() error {
+		var err error
+
+		key, err = tpm2.Unseal(sealed)
+
+		return err
+	}); err != nil {
 		return nil, err
 	}
 

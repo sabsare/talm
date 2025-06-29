@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/siderolabs/go-pointer"
+	"github.com/siderolabs/go-procfs/procfs"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 
@@ -31,30 +33,26 @@ func LogMode(ctx context.Context, log *zap.Logger, rt runtime.Runtime, next Next
 
 // SetupSystemDirectories creates system default directories.
 func SetupSystemDirectories(ctx context.Context, log *zap.Logger, rt runtime.Runtime, next NextTaskFunc) error {
-	for _, path := range []string{constants.SystemEtcPath, constants.SystemVarPath, constants.StateMountPoint} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
+	for _, dir := range []struct {
+		path  string
+		perm  os.FileMode
+		label string
+	}{
+		{constants.SystemEtcPath, 0o700, constants.EtcSelinuxLabel},
+		{constants.SystemVarPath, 0o700, constants.SystemVarSelinuxLabel},
+		{constants.StateMountPoint, 0o700, ""},
+		{constants.SystemRunPath, 0o751, "system_u:object_r:system_run_t:s0"},
+		{"/system/run/containerd", 0o711, "system_u:object_r:sys_containerd_run_t:s0"},
+		{"/run/containerd", 0o711, "system_u:object_r:pod_containerd_run_t:s0"},
+	} {
+		if err := os.MkdirAll(dir.path, dir.perm); err != nil {
 			return fmt.Errorf("setupSystemDirectories: %w", err)
 		}
 
-		var label string
-
-		switch path {
-		case constants.SystemEtcPath:
-			label = constants.EtcSelinuxLabel
-		case constants.SystemVarPath:
-			label = constants.SystemVarSelinuxLabel
-		default: // /system/state is another mount
-			label = ""
-		}
-
-		if err := selinux.SetLabel(path, label); err != nil {
-			return err
-		}
-	}
-
-	for _, path := range []string{constants.SystemRunPath} {
-		if err := os.MkdirAll(path, 0o751); err != nil {
-			return fmt.Errorf("setupSystemDirectories: %w", err)
+		if dir.label != "" {
+			if err := selinux.SetLabel(dir.path, dir.label); err != nil {
+				return fmt.Errorf("setupSystemDirectories: %w", err)
+			}
 		}
 	}
 
@@ -76,8 +74,8 @@ func MountCgroups(ctx context.Context, log *zap.Logger, rt runtime.Runtime, next
 		return next()(ctx, log, rt, next)
 	}
 
-	if mount.ForceCGroupsV1() {
-		log.Warn("cgroupsv1 is deprecated and will not be supported in the 1.10 release other than in the container mode")
+	if pointer.SafeDeref(procfs.ProcCmdline().Get(constants.KernelParamCGroups).First()) == "0" {
+		log.Warn(fmt.Sprintf("kernel argument %v is no longer supported", constants.KernelParamCGroups))
 	}
 
 	unmounter, err := mount.CGroupMountPoints().Mount()

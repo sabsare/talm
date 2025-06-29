@@ -82,11 +82,14 @@ func (d *DiskContext) ToCELContext() map[string]any {
 type ManagerContext struct {
 	Cfg               *block.VolumeConfig
 	Status            *block.VolumeStatusSpec
+	ParentStatus      *block.VolumeStatus
+	ParentFinalizer   string
 	DiscoveredVolumes []*blockpb.DiscoveredVolumeSpec
 	Disks             []DiskContext
 
 	DevicesReady            bool
 	PreviousWaveProvisioned bool
 	GetSystemInformation    func(context.Context) (*hardware.SystemInformation, error)
-	Lifecycle               *block.VolumeLifecycle
+	TPMLocker               func(context.Context, func() error) error
+	ShouldCloseVolume       bool
 }

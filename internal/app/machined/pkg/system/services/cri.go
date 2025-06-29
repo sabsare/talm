@@ -11,6 +11,7 @@ import (
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/defaults"
+	"github.com/siderolabs/gen/xslices"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
@@ -78,6 +79,27 @@ func (c *CRI) Condition(r runtime.Runtime) conditions.Condition {
 // DependsOn implements the Service interface.
 func (c *CRI) DependsOn(runtime.Runtime) []string {
 	return nil
+}
+
+// Volumes implements the Service interface.
+func (c *CRI) Volumes(r runtime.Runtime) []string {
+	volumes := []string{
+		"/var/lib",
+		"/var/lib/cni",
+		"/var/lib/containerd",
+		"/var/run",
+		"/var/run/lock",
+	}
+
+	if !r.State().Platform().Mode().InContainer() {
+		volumes = append(volumes,
+			xslices.Map(constants.Overlays, func(target constants.SELinuxLabeledPath) string {
+				return target.Path
+			})...,
+		)
+	}
+
+	return volumes
 }
 
 // Runner implements the Service interface.

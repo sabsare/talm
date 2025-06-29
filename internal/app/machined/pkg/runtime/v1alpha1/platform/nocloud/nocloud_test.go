@@ -25,20 +25,20 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/resources/runtime"
 )
 
-//go:embed testdata/metadata-v1.yaml
-var rawMetadataV1 []byte
+//go:embed testdata/in-v1.yaml
+var rawNetworkConfigV1 []byte
 
-//go:embed testdata/metadata-v1-pnap.yaml
-var rawMetadataV1Pnap []byte
+//go:embed testdata/in-v1-pnap.yaml
+var rawNetworkConfigV1Pnap []byte
 
-//go:embed testdata/metadata-v2-nocloud.yaml
-var rawMetadataV2Nocloud []byte
+//go:embed testdata/in-v2-nocloud.yaml
+var rawNetworkConfigV2Nocloud []byte
 
-//go:embed testdata/metadata-v2-cloud-init.yaml
-var rawMetadataV2CloudInit []byte
+//go:embed testdata/in-v2-cloud-init.yaml
+var rawNetworkConfigV2CloudInit []byte
 
-//go:embed testdata/metadata-v2-serverscom.yaml
-var rawMetadataV2Serverscom []byte
+//go:embed testdata/in-v2-serverscom.yaml
+var rawNetworkConfigV2Serverscom []byte
 
 //go:embed testdata/expected-v1.yaml
 var expectedNetworkConfigV1 string
@@ -52,7 +52,7 @@ var expectedNetworkConfigV2 string
 //go:embed testdata/expected-v2-serverscom.yaml
 var expectedNetworkConfigV2Serverscom string
 
-func TestParseMetadata(t *testing.T) {
+func TestParseNetworkConfig(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -64,36 +64,36 @@ func TestParseMetadata(t *testing.T) {
 	}{
 		{
 			name:     "V1",
-			raw:      rawMetadataV1,
+			raw:      rawNetworkConfigV1,
 			expected: expectedNetworkConfigV1,
 		},
 		{
 			name:     "V1-pnap",
-			raw:      rawMetadataV1Pnap,
+			raw:      rawNetworkConfigV1Pnap,
 			expected: expectedNetworkConfigV1Pnap,
 		},
 		{
 			name:                  "V2-nocloud",
-			raw:                   rawMetadataV2Nocloud,
+			raw:                   rawNetworkConfigV2Nocloud,
 			expected:              expectedNetworkConfigV2,
 			expectedNeedsRecocile: true,
 		},
 		{
 			name:                  "V2-cloud-init",
-			raw:                   rawMetadataV2CloudInit,
+			raw:                   rawNetworkConfigV2CloudInit,
 			expected:              expectedNetworkConfigV2,
 			expectedNeedsRecocile: true,
 		},
 		{
 			name:     "V2-servers.com",
-			raw:      rawMetadataV2Serverscom,
+			raw:      rawNetworkConfigV2Serverscom,
 			expected: expectedNetworkConfigV2Serverscom,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			t.Cleanup(cancel)
 
 			n := &nocloud.Nocloud{}
@@ -169,6 +169,77 @@ func TestParseMetadata(t *testing.T) {
 
 			assert.Equal(t, tt.expected, string(marshaled))
 			assert.Equal(t, tt.expected, string(marshaled2))
+		})
+	}
+}
+
+//go:embed testdata/metadata-nocloud.yaml
+var rawMetadataNocloud []byte
+
+func TestMedatada(t *testing.T) {
+	t.Parallel()
+
+	var md nocloud.MetadataConfig
+
+	err := yaml.Unmarshal(rawMetadataNocloud, &md)
+	require.NoError(t, err)
+
+	assert.Equal(t, nocloud.MetadataConfig{
+		InstanceID:  "80d6927ecb30c1707b12f38ed1211535930ff16e",
+		InternalDNS: "talos-worker-3",
+	}, md)
+}
+
+func TestExtractURL(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		userdata []byte
+
+		expectedURL   string
+		expectedError string
+	}{
+		{
+			name: "valid include userdata URL",
+			userdata: []byte(`https://metadataserver/userdata
+`),
+			expectedURL: "https://metadataserver/userdata",
+		},
+		{
+			name: "multiple URLs is invalid",
+			userdata: []byte(`
+https://metadataserver1/userdata
+https://metadataserver2/userdata
+https://metadataserver3/userdata
+`),
+			expectedError: "multiple #include URLs found",
+		},
+		{
+			name: "invalid URL",
+			userdata: []byte(`
+:/invalidurl/userdata`),
+			expectedError: "missing protocol scheme",
+		},
+		{
+			name: "no URL found",
+			userdata: []byte(`
+`),
+			expectedError: "no #include URL found in nocloud configuration",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			u, err := nocloud.ExtractIncludeURL(test.userdata)
+
+			if test.expectedError != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, test.expectedError)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, test.expectedURL, u.String())
+			}
 		})
 	}
 }

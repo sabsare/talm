@@ -47,16 +47,16 @@ var rules = map[string]role.Set{
 	"/machine.MachineService/DiskStats":                   role.MakeSet(role.Admin, role.Operator, role.Reader),
 	"/machine.MachineService/DiskUsage":                   role.MakeSet(role.Admin, role.Operator, role.Reader),
 	"/machine.MachineService/Dmesg":                       role.MakeSet(role.Admin, role.Operator, role.Reader),
-	"/machine.MachineService/EtcdAlarmList":               role.MakeSet(role.Admin, role.Operator),
+	"/machine.MachineService/EtcdAlarmList":               role.MakeSet(role.Admin, role.Operator, role.Reader, role.EtcdBackup),
 	"/machine.MachineService/EtcdAlarmDisarm":             role.MakeSet(role.Admin, role.Operator),
 	"/machine.MachineService/EtcdDefragment":              role.MakeSet(role.Admin, role.Operator),
 	"/machine.MachineService/EtcdForfeitLeadership":       role.MakeSet(role.Admin),
 	"/machine.MachineService/EtcdLeaveCluster":            role.MakeSet(role.Admin),
-	"/machine.MachineService/EtcdMemberList":              role.MakeSet(role.Admin, role.Operator, role.Reader),
+	"/machine.MachineService/EtcdMemberList":              role.MakeSet(role.Admin, role.Operator, role.Reader, role.EtcdBackup),
 	"/machine.MachineService/EtcdRecover":                 role.MakeSet(role.Admin),
 	"/machine.MachineService/EtcdRemoveMemberByID":        role.MakeSet(role.Admin),
 	"/machine.MachineService/EtcdSnapshot":                role.MakeSet(role.Admin, role.Operator, role.EtcdBackup),
-	"/machine.MachineService/EtcdStatus":                  role.MakeSet(role.Admin, role.Operator),
+	"/machine.MachineService/EtcdStatus":                  role.MakeSet(role.Admin, role.Operator, role.Reader, role.EtcdBackup),
 	"/machine.MachineService/Events":                      role.MakeSet(role.Admin, role.Operator, role.Reader),
 	"/machine.MachineService/GenerateClientConfiguration": role.MakeSet(role.Admin),
 	"/machine.MachineService/GenerateConfiguration":       role.MakeSet(role.Admin),
@@ -224,6 +224,11 @@ func (m *Machined) Condition(runtime.Runtime) conditions.Condition {
 
 // DependsOn implements the Service interface.
 func (m *Machined) DependsOn(runtime.Runtime) []string {
+	return nil
+}
+
+// Volumes implements the Service interface.
+func (m *Machined) Volumes(runtime.Runtime) []string {
 	return nil
 }
 

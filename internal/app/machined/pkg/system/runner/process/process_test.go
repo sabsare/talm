@@ -7,7 +7,6 @@ package process_test
 import (
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,7 +17,9 @@ import (
 	"time"
 
 	"github.com/siderolabs/go-cmd/pkg/cmd/proc/reaper"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/goleak"
 
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime"
 	"github.com/cozystack/talm/internal/app/machined/pkg/runtime/logging"
@@ -28,8 +29,10 @@ import (
 	"github.com/cozystack/talm/internal/app/machined/pkg/system/runner/restart"
 )
 
-func MockEventSink(state events.ServiceState, message string, args ...any) {
-	log.Printf("state %s: %s", state, fmt.Sprintf(message, args...))
+func MockEventSink(t *testing.T) func(state events.ServiceState, message string, args ...any) {
+	return func(state events.ServiceState, message string, args ...any) {
+		t.Logf("state %s: %s", state, fmt.Sprintf(message, args...))
+	}
 }
 
 type ProcessSuite struct {
@@ -60,14 +63,14 @@ func (suite *ProcessSuite) TearDownSuite() {
 func (suite *ProcessSuite) TestRunSuccess() {
 	r := process.NewRunner(false, &runner.Args{
 		ID:          "test",
-		ProcessArgs: []string{"/bin/sh", "-c", "exit 0"},
+		ProcessArgs: []string{"/bin/bash", "-c", "exit 0"},
 	}, runner.WithLoggingManager(suite.loggingManager))
 
 	suite.Assert().NoError(r.Open())
 
 	defer func() { suite.Assert().NoError(r.Close()) }()
 
-	suite.Assert().NoError(r.Run(MockEventSink))
+	suite.Assert().NoError(r.Run(MockEventSink(suite.T())))
 	// calling stop when Run has finished is no-op
 	suite.Assert().NoError(r.Stop())
 }
@@ -75,25 +78,24 @@ func (suite *ProcessSuite) TestRunSuccess() {
 func (suite *ProcessSuite) TestRunLogs() {
 	r := process.NewRunner(false, &runner.Args{
 		ID:          "logtest",
-		ProcessArgs: []string{"/bin/sh", "-c", "echo -n \"Test 1\nTest 2\n\""},
+		ProcessArgs: []string{"/bin/bash", "-c", "echo -n \"Test 1\nTest 2\n\""},
 	}, runner.WithLoggingManager(suite.loggingManager))
 
 	suite.Assert().NoError(r.Open())
 
 	defer func() { suite.Assert().NoError(r.Close()) }()
 
-	suite.Assert().NoError(r.Run(MockEventSink))
+	suite.Assert().NoError(r.Run(MockEventSink(suite.T())))
 
-	logFile, err := os.Open(filepath.Join(suite.tmpDir, "logtest.log"))
-	suite.Assert().NoError(err)
+	// the log file is written asynchronously, so we need to wait a bit
+	suite.EventuallyWithT(func(collect *assert.CollectT) {
+		asrt := assert.New(collect)
 
-	//nolint:errcheck
-	defer logFile.Close()
+		logContents, err := os.ReadFile(filepath.Join(suite.tmpDir, "logtest.log"))
+		asrt.NoError(err)
 
-	logContents, err := io.ReadAll(logFile)
-	suite.Assert().NoError(err)
-
-	suite.Assert().Equal([]byte("Test 1\nTest 2\n"), logContents)
+		asrt.Equal([]byte("Test 1\nTest 2\n"), logContents)
+	}, time.Second, 10*time.Millisecond)
 }
 
 func (suite *ProcessSuite) TestRunRestartFailed() {
@@ -103,7 +105,7 @@ func (suite *ProcessSuite) TestRunRestartFailed() {
 
 	r := restart.New(process.NewRunner(false, &runner.Args{
 		ID:          "restarter",
-		ProcessArgs: []string{"/bin/sh", "-c", "echo \"ran\"; test -f " + testFile},
+		ProcessArgs: []string{"/bin/bash", "-c", "echo \"ran\"; test -f " + testFile},
 	}, runner.WithLoggingManager(suite.loggingManager)), restart.WithType(restart.UntilSuccess), restart.WithRestartInterval(time.Millisecond))
 
 	suite.Assert().NoError(r.Open())
@@ -116,7 +118,7 @@ func (suite *ProcessSuite) TestRunRestartFailed() {
 
 	go func() {
 		defer wg.Done()
-		suite.Assert().NoError(r.Run(MockEventSink))
+		suite.Assert().NoError(r.Run(MockEventSink(suite.T())))
 	}()
 
 	fetchLog := func() []byte {
@@ -156,7 +158,7 @@ func (suite *ProcessSuite) TestStopFailingAndRestarting() {
 
 	r := restart.New(process.NewRunner(false, &runner.Args{
 		ID:          "endless",
-		ProcessArgs: []string{"/bin/sh", "-c", "test -f " + testFile},
+		ProcessArgs: []string{"/bin/bash", "-c", "test -f " + testFile},
 	}, runner.WithLoggingManager(suite.loggingManager)), restart.WithType(restart.Forever), restart.WithRestartInterval(5*time.Millisecond))
 
 	suite.Assert().NoError(r.Open())
@@ -166,7 +168,7 @@ func (suite *ProcessSuite) TestStopFailingAndRestarting() {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- r.Run(MockEventSink)
+		done <- r.Run(MockEventSink(suite.T()))
 	}()
 
 	time.Sleep(40 * time.Millisecond)
@@ -200,7 +202,7 @@ func (suite *ProcessSuite) TestStopFailingAndRestarting() {
 func (suite *ProcessSuite) TestStopSigKill() {
 	r := process.NewRunner(false, &runner.Args{
 		ID:          "nokill",
-		ProcessArgs: []string{"/bin/sh", "-c", "trap -- '' SIGTERM; while :; do :; done"},
+		ProcessArgs: []string{"/bin/bash", "-c", "trap -- '' SIGTERM; while :; do :; done"},
 	},
 		runner.WithLoggingManager(suite.loggingManager),
 		runner.WithGracefulShutdownTimeout(10*time.Millisecond),
@@ -213,7 +215,7 @@ func (suite *ProcessSuite) TestStopSigKill() {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- r.Run(MockEventSink)
+		done <- r.Run(MockEventSink(suite.T()))
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -223,6 +225,10 @@ func (suite *ProcessSuite) TestStopSigKill() {
 }
 
 func (suite *ProcessSuite) TestPriority() {
+	if os.Geteuid() != 0 {
+		suite.T().Skip("skipping test, need root privileges")
+	}
+
 	pidFile := filepath.Join(suite.tmpDir, "talos-test-pid-prio")
 	//nolint:errcheck
 	_ = os.Remove(pidFile)
@@ -236,7 +242,7 @@ func (suite *ProcessSuite) TestPriority() {
 
 	r := process.NewRunner(false, &runner.Args{
 		ID:          "nokill",
-		ProcessArgs: []string{"/bin/sh", "-c", "echo $BASHPID >> " + pidFile + "; trap -- '' SIGTERM; while :; do :; done"},
+		ProcessArgs: []string{"/bin/bash", "-c", "echo $BASHPID >> " + pidFile + "; trap -- '' SIGTERM; while :; do :; done"},
 	},
 		runner.WithLoggingManager(suite.loggingManager),
 		runner.WithGracefulShutdownTimeout(10*time.Millisecond),
@@ -249,7 +255,7 @@ func (suite *ProcessSuite) TestPriority() {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- r.Run(MockEventSink)
+		done <- r.Run(MockEventSink(suite.T()))
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -272,6 +278,10 @@ func (suite *ProcessSuite) TestPriority() {
 }
 
 func (suite *ProcessSuite) TestIOPriority() {
+	if os.Geteuid() != 0 {
+		suite.T().Skip("skipping test, need root privileges")
+	}
+
 	pidFile := filepath.Join(suite.tmpDir, "talos-test-pid-ionice")
 	//nolint:errcheck
 	_ = os.Remove(pidFile)
@@ -286,7 +296,7 @@ func (suite *ProcessSuite) TestIOPriority() {
 
 	r := process.NewRunner(false, &runner.Args{
 		ID:          "nokill",
-		ProcessArgs: []string{"/bin/sh", "-c", "echo $BASHPID >> " + pidFile + "; trap -- '' SIGTERM; while :; do :; done"},
+		ProcessArgs: []string{"/bin/bash", "-c", "echo $BASHPID >> " + pidFile + "; trap -- '' SIGTERM; while :; do :; done"},
 	},
 		runner.WithLoggingManager(suite.loggingManager),
 		runner.WithGracefulShutdownTimeout(10*time.Millisecond),
@@ -299,7 +309,7 @@ func (suite *ProcessSuite) TestIOPriority() {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- r.Run(MockEventSink)
+		done <- r.Run(MockEventSink(suite.T()))
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -322,6 +332,10 @@ func (suite *ProcessSuite) TestIOPriority() {
 }
 
 func (suite *ProcessSuite) TestSchedulingPolicy() {
+	if os.Geteuid() != 0 {
+		suite.T().Skip("skipping test, need root privileges")
+	}
+
 	pidFile := filepath.Join(suite.tmpDir, "talos-test-pid-sched")
 	//nolint:errcheck
 	_ = os.Remove(pidFile)
@@ -335,7 +349,7 @@ func (suite *ProcessSuite) TestSchedulingPolicy() {
 
 	r := process.NewRunner(false, &runner.Args{
 		ID:          "nokill",
-		ProcessArgs: []string{"/bin/sh", "-c", "echo $BASHPID >> " + pidFile + "; trap -- '' SIGTERM; while :; do :; done"},
+		ProcessArgs: []string{"/bin/bash", "-c", "echo $BASHPID >> " + pidFile + "; trap -- '' SIGTERM; while :; do :; done"},
 	},
 		runner.WithLoggingManager(suite.loggingManager),
 		runner.WithGracefulShutdownTimeout(10*time.Millisecond),
@@ -348,7 +362,7 @@ func (suite *ProcessSuite) TestSchedulingPolicy() {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- r.Run(MockEventSink)
+		done <- r.Run(MockEventSink(suite.T()))
 	}()
 
 	time.Sleep(10 * time.Millisecond)
@@ -371,8 +385,14 @@ func (suite *ProcessSuite) TestSchedulingPolicy() {
 
 func TestProcessSuite(t *testing.T) {
 	for _, runReaper := range []bool{true, false} {
-		func(runReaper bool) {
-			t.Run(fmt.Sprintf("runReaper=%v", runReaper), func(t *testing.T) { suite.Run(t, &ProcessSuite{runReaper: runReaper}) })
-		}(runReaper)
+		t.Run(fmt.Sprintf("runReaper=%v", runReaper),
+			func(t *testing.T) {
+				suite.Run(t, &ProcessSuite{runReaper: runReaper})
+			},
+		)
 	}
+}
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
 }

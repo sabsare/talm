@@ -13,7 +13,6 @@ import (
 // Node represents data gathered from a single node.
 type Node struct {
 	// These fields are directly API responses.
-	Hostname      *machine.Hostname
 	LoadAvg       *machine.LoadAvg
 	Version       *machine.Version
 	Memory        *machine.Memory
@@ -179,8 +178,8 @@ func (node *Node) UpdateDiff(old *Node) {
 		node.SystemStatDiff = &machine.SystemStat{
 			// TODO: support other fields
 			CpuTotal:        cpuInfoDiff(old.SystemStat.GetCpuTotal(), node.SystemStat.GetCpuTotal()),
-			ContextSwitches: node.SystemStat.ContextSwitches - old.SystemStat.ContextSwitches,
-			ProcessCreated:  node.SystemStat.ProcessCreated - old.SystemStat.ProcessCreated,
+			ContextSwitches: node.SystemStat.GetContextSwitches() - old.SystemStat.GetContextSwitches(),
+			ProcessCreated:  node.SystemStat.GetProcessCreated() - old.SystemStat.GetProcessCreated(),
 		}
 	}
 

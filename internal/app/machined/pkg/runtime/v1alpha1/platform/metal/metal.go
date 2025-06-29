@@ -32,6 +32,7 @@ import (
 	"github.com/siderolabs/talos/pkg/machinery/cel"
 	"github.com/siderolabs/talos/pkg/machinery/cel/celenv"
 	"github.com/siderolabs/talos/pkg/machinery/constants"
+	"github.com/siderolabs/talos/pkg/machinery/imager/quirks"
 	"github.com/siderolabs/talos/pkg/machinery/meta"
 	"github.com/siderolabs/talos/pkg/machinery/resources/block"
 	"github.com/siderolabs/talos/pkg/machinery/resources/hardware"
@@ -179,7 +180,7 @@ func readConfigFromISO(ctx context.Context, r state.State) ([]byte, error) {
 
 	defer unmounter() //nolint:errcheck
 
-	b, err := os.ReadFile(filepath.Join(mnt, filepath.Base(constants.ConfigPath)))
+	b, err := os.ReadFile(filepath.Join(mnt, constants.ConfigFilename))
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
@@ -195,14 +196,20 @@ func readConfigFromISO(ctx context.Context, r state.State) ([]byte, error) {
 }
 
 // KernelArgs implements the runtime.Platform interface.
-func (m *Metal) KernelArgs(arch string) procfs.Parameters {
+func (m *Metal) KernelArgs(arch string, quirks quirks.Quirks) procfs.Parameters {
 	switch arch {
 	case "amd64":
-		return []*procfs.Parameter{
+		if quirks.SupportsMetalPlatformConsoleTTYS0() {
+			return procfs.Parameters{
+				procfs.NewParameter("console").Append("ttyS0").Append("tty0"),
+			}
+		}
+
+		return procfs.Parameters{
 			procfs.NewParameter("console").Append("tty0"),
 		}
 	case "arm64":
-		return []*procfs.Parameter{
+		return procfs.Parameters{
 			procfs.NewParameter("console").Append("ttyAMA0").Append("tty0"),
 		}
 	default:
@@ -250,7 +257,7 @@ func (m *Metal) NetworkConfiguration(ctx context.Context, st state.State, ch cha
 		switch event.Type {
 		case state.Errored:
 			return fmt.Errorf("watch failed: %w", event.Error)
-		case state.Bootstrapped:
+		case state.Bootstrapped, state.Noop:
 			// ignored, should not happen
 		case state.Created, state.Updated:
 			switch r := event.Resource.(type) {

@@ -1,6 +1,5 @@
 VERSION=$(shell git describe --tags)
-TALOS_VERSION=$(shell  go list -m github.com/siderolabs/talos | awk '{sub(/^v/, "", $$NF); print $$NF}')
-
+TALOS_VERSION="1.10.4"
 generate:
 	go generate
 
@@ -51,6 +50,6 @@ import-internal:
 	rm -rf internal/pkg internal/app
 	wget -O- https://github.com/siderolabs/talos/archive/refs/tags/v$(TALOS_VERSION).tar.gz | tar --strip=1 -xzf- \
 		talos-$(TALOS_VERSION)/internal/app \
-		talos-$(TALOS_VERSION)/internal/pkg
+		talos-$(TALOS_VERSION)/internal/pkg \
 	rm -rf internal/app/init/ internal/pkg/rng/ internal/pkg/tui/
 	sed -i 's|github.com/siderolabs/talos/internal|github.com/cozystack/talm/internal|g' `grep -rl 'github.com/siderolabs/talos/internal' internal`

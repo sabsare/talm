@@ -64,6 +64,10 @@ func (m *MockService) DependsOn(runtime.Runtime) []string {
 	return m.dependencies
 }
 
+func (m *MockService) Volumes(runtime.Runtime) []string {
+	return nil
+}
+
 type MockHealthcheckedService struct {
 	MockService
 

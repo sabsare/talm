@@ -39,7 +39,7 @@ import (
 // * machine is controlplane one.
 func controlplaneMapFunc[Output generic.ResourceWithRD](output Output) func(cfg *config.MachineConfig) optional.Optional[Output] {
 	return func(cfg *config.MachineConfig) optional.Optional[Output] {
-		if cfg.Metadata().ID() != config.V1Alpha1ID {
+		if cfg.Metadata().ID() != config.ActiveID {
 			return optional.None[Output]()
 		}
 
@@ -131,11 +131,6 @@ func NewControlPlaneAuthorizationController() *ControlPlaneAuthorizationControll
 				var authorizers []k8s.AuthorizationAuthorizersSpec
 
 				for _, authorizer := range cfgProvider.Cluster().APIServer().AuthorizationConfig() {
-					// skip Node and RBAC authorizers as we add them by default later on.
-					if authorizer.Type() == "Node" || authorizer.Type() == "RBAC" {
-						continue
-					}
-
 					authorizers = slices.Concat(authorizers, []k8s.AuthorizationAuthorizersSpec{
 						{
 							Type:    authorizer.Type(),
@@ -145,7 +140,25 @@ func NewControlPlaneAuthorizationController() *ControlPlaneAuthorizationControll
 					})
 				}
 
-				res.TypedSpec().Config = slices.Concat(v1alpha1.APIServerDefaultAuthorizationConfigAuthorizers, authorizers)
+				if !slices.ContainsFunc(authorizers, func(a k8s.AuthorizationAuthorizersSpec) bool {
+					return a.Type == "Node"
+				}) {
+					authorizers = slices.Insert(authorizers, 0, k8s.AuthorizationAuthorizersSpec{
+						Type: "Node",
+						Name: "node",
+					})
+				}
+
+				if !slices.ContainsFunc(authorizers, func(a k8s.AuthorizationAuthorizersSpec) bool {
+					return a.Type == "RBAC"
+				}) {
+					authorizers = slices.Insert(authorizers, 1, k8s.AuthorizationAuthorizersSpec{
+						Type: "RBAC",
+						Name: "rbac",
+					})
+				}
+
+				res.TypedSpec().Config = authorizers
 
 				return nil
 			},
@@ -167,7 +180,7 @@ func NewControlPlaneAPIServerController() *ControlPlaneAPIServerController {
 
 				var cloudProvider string
 				if cfgProvider.Cluster().ExternalCloudProvider().Enabled() {
-					cloudProvider = "external" //nolint:goconst
+					cloudProvider = CloudProviderExternal
 				}
 
 				advertisedAddress := "$(POD_IP)"
@@ -211,7 +224,7 @@ func NewControlPlaneControllerManagerController() *ControlPlaneControllerManager
 				var cloudProvider string
 
 				if cfgProvider.Cluster().ExternalCloudProvider().Enabled() {
-					cloudProvider = "external"
+					cloudProvider = CloudProviderExternal
 				}
 
 				*res.TypedSpec() = k8s.ControllerManagerConfigSpec{
